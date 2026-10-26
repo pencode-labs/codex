@@ -1,0 +1,8 @@
+{
+  "id": "codex",
+  "name": "Codex Agent",
+  "version": "0.1.0",
+  "publisher": "Pencode",
+  "description": "通过 Codex app-server 在编辑器标签页中聊天、编程和恢复会话。",
+  "entry": "bin/codex-agent"
+}
