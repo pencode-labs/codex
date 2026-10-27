@@ -40,6 +40,7 @@ func fixtureServer() {
 	count := 0
 	modelPages := 0
 	active := ""
+	threadPermissions := make(map[string]string)
 	reader := bufio.NewScanner(os.Stdin)
 	for reader.Scan() {
 		var msg envelope
@@ -66,15 +67,17 @@ func fixtureServer() {
 		if msg.Method != "initialize" && !initialized {
 			os.Exit(3)
 		}
-		if msg.Method == "thread/start" || msg.Method == "thread/resume" {
-			var params struct {
-				Sandbox        string `json:"sandbox"`
-				ApprovalPolicy string `json:"approvalPolicy"`
-			}
-			if json.Unmarshal(msg.Params, &params) != nil || params.Sandbox != "workspace-write" || params.ApprovalPolicy != "on-request" {
-				os.Exit(4)
-			}
+		var permissions struct {
+			Sandbox           string `json:"sandbox"`
+			ApprovalPolicy    string `json:"approvalPolicy"`
+			ApprovalsReviewer string `json:"approvalsReviewer"`
+			SandboxPolicy     struct {
+				Type          string `json:"type"`
+				NetworkAccess bool   `json:"networkAccess"`
+			} `json:"sandboxPolicy"`
 		}
+		_ = json.Unmarshal(msg.Params, &permissions)
+		preset := permissions.ApprovalPolicy + "/" + permissions.ApprovalsReviewer + "/"
 		switch msg.Method {
 		case "initialize":
 			response(map[string]string{"userAgent": "fixture"})
@@ -87,19 +90,21 @@ func fixtureServer() {
 			if modelPages > 2 {
 				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "model catalog was not cached"}})
 			} else if p.Cursor == "" {
-				response(map[string]any{"data": []modelOption{{Model: "fixture-sol", DisplayName: "Fixture Sol"}, {Model: "hidden-model", Hidden: true}}, "nextCursor": "second"})
+				response(map[string]any{"data": []modelOption{{Model: "fixture-sol", DisplayName: "Fixture Sol", IsDefault: true, DefaultReasoningEffort: "low"}, {Model: "hidden-model", Hidden: true}}, "nextCursor": "second"})
 			} else {
-				response(map[string]any{"data": []modelOption{{Model: "fixture-luna", DisplayName: "Fixture Luna"}}, "nextCursor": nil})
+				response(map[string]any{"data": []modelOption{{Model: "fixture-luna", DisplayName: "Fixture Luna", DefaultReasoningEffort: "medium", SupportedReasoningEfforts: []reasoningEffortOption{{"low"}, {"medium"}, {"high"}}}}, "nextCursor": nil})
 			}
 		case "thread/start":
 			count++
 			active = fmt.Sprintf("thread%d", count)
+			threadPermissions[active] = preset + permissions.Sandbox
 			response(map[string]any{"thread": map[string]string{"id": active, "cwd": mustGetwd()}})
 		case "thread/name/set":
 			response(struct{}{})
 		case "thread/list":
 			response(map[string]any{"data": []map[string]string{{"id": "thread1", "name": "Saved task", "cwd": mustGetwd()}}, "nextCursor": nil})
 		case "thread/resume":
+			threadPermissions["thread1"] = preset + permissions.Sandbox
 			response(map[string]any{"thread": map[string]string{"id": "thread1", "name": "Saved task", "cwd": mustGetwd()}})
 		case "thread/turns/list":
 			response(map[string]any{"data": []map[string]any{{"id": "old-turn", "status": "completed", "items": []map[string]string{{"id": "old-reply", "type": "agentMessage", "text": "Stored conversation"}}}}, "nextCursor": nil})
@@ -108,12 +113,14 @@ func fixtureServer() {
 				ThreadID string  `json:"threadId"`
 				Input    []input `json:"input"`
 				Model    string  `json:"model"`
+				Effort   string  `json:"effort"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			if len(p.Input) > 0 && p.Input[0].Text == "implement feature" && p.Model != "fixture-luna" {
+			if len(p.Input) > 0 && p.Input[0].Text == "implement feature" && (p.Model != "fixture-luna" || p.Effort != "high") {
 				os.Exit(5)
 			}
 			active = p.ThreadID
+			notify("item/completed", map[string]any{"threadId": active, "item": map[string]string{"id": "permissions", "type": "agentMessage", "text": "Thread permissions: " + threadPermissions[active] + "; Turn permissions: " + preset + permissions.SandboxPolicy.Type + fmt.Sprintf("; network=%t; Effort: %s", permissions.SandboxPolicy.NetworkAccess, p.Effort)}})
 			if len(p.Input) > 0 && p.Input[0].Text == "fail" {
 				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "fixture failure"}})
 				continue
@@ -229,12 +236,45 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		t.Fatal("composer is not a panel")
 	}
 	event("composer", "input", "prompt", "implement feature")
+	event("composer", "click", "permission-settings", "")
+	permissions := waitUI("permissions", "完全访问权限")
+	if permissions.Kind != peb.ContextMenu || permissions.Anchor != "ui:composer#permission-settings" || permissions.Placement.Mode != peb.PositionAnchorAbove || !strings.Contains(permissions.View.HTML, `data-ref="permission/ask" aria-checked="true"`) {
+		t.Fatal("wrong permission menu or default", permissions)
+	}
+	event("permissions", "click", "permission-help", "")
+	waitUI("permissions", "设置从下一次发送开始生效")
+	event("permissions", "close", "", "")
+	waitUI("composer", `aria-label="权限设置" aria-expanded="false"`)
 	event("composer", "click", "model-settings", "")
 	menu := waitUI("models", "Fixture Luna")
 	if menu.Kind != peb.ContextMenu || menu.Anchor != "ui:composer#model-settings" || menu.Placement.Mode != peb.PositionAnchorAbove || strings.Contains(menu.View.HTML, "hidden-model") {
 		t.Fatal("wrong model catalog or placement", menu)
 	}
 	event("models", "click", "model/fixture-luna", "")
+	menu = waitUI("models", "选择推理强度")
+	if !strings.Contains(menu.View.HTML, `data-ref="effort/medium" aria-checked="true"`) {
+		t.Fatal("model default effort not marked", menu.View.HTML)
+	}
+	event("models", "click", "models-back", "")
+	menu = waitUI("models", "推荐模型集")
+	if !strings.Contains(menu.View.HTML, `data-ref="model-default" aria-checked="true"`) {
+		t.Fatal("going back applied the pending model", menu.View.HTML)
+	}
+	event("models", "click", "model/fixture-luna", "")
+	waitUI("models", "选择推理强度")
+	event("models", "close", "", "")
+	if ui := waitUI("composer", `aria-label="选择模型" aria-expanded="false"`); !strings.Contains(ui.View.HTML, "><span>默认</span>") {
+		t.Fatal("closing effort selection applied the pending model", ui.View.HTML)
+	}
+	event("composer", "click", "model-settings", "")
+	waitUI("models", "Fixture Sol")
+	event("models", "click", "model/fixture-sol", "")
+	waitUI("composer", "Fixture Sol") // Models without effort options complete directly.
+	event("composer", "click", "model-settings", "")
+	waitUI("models", "Fixture Luna")
+	event("models", "click", "model/fixture-luna", "")
+	waitUI("models", "选择推理强度")
+	event("models", "click", "effort/high", "")
 	if ui := waitUI("composer", "Fixture Luna"); !strings.Contains(ui.View.HTML, "implement feature</textarea>") {
 		t.Fatal("selecting a model lost the draft")
 	}
@@ -253,21 +293,51 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("composer", "click", "model-settings", "")
 	waitUI("models", "Fixture Luna")
 	event("models", "click", "model/fixture-luna", "")
+	menu = waitUI("models", "选择推理强度")
+	if !strings.Contains(menu.View.HTML, `data-ref="effort/medium" aria-checked="true"`) {
+		t.Fatal("model default effort not marked", menu.View.HTML)
+	}
+	event("models", "click", "effort/high", "")
 	waitUI("composer", "Fixture Luna")
 	event("composer", "click", "send", "")
 	if ui := waitUI("thread1", "fixture approval"); ui.Kind != peb.EditorTab || ui.Title != "implement feature" {
 		t.Fatal("missing conversation tab", ui)
+	} else if !strings.Contains(ui.View.HTML, "Thread permissions: on-request/user/workspace-write; Turn permissions: on-request/user/workspaceWrite; network=false; Effort: high") {
+		t.Fatal("default permissions were not sent", ui.View.HTML)
 	}
 	event("thread1", "click", "accept/100", "")
 	ui := waitUI("thread1", "Final reply")
 	if !strings.Contains(ui.View.HTML, "tests passed") || !strings.Contains(ui.View.HTML, "<strong>Final reply</strong> accept") || strings.Contains(ui.View.HTML, "Streamed reply") {
 		t.Fatal("completed items did not replace streamed content", ui.View.HTML)
 	}
+	event("composer", "click", "model-settings", "")
+	waitUI("models", "Fixture Luna")
+	event("models", "click", "model/fixture-luna", "")
+	menu = waitUI("models", "选择推理强度")
+	if !strings.Contains(menu.View.HTML, `data-ref="effort/high" aria-checked="true"`) {
+		t.Fatal("saved effort not marked", menu.View.HTML)
+	}
+	event("models", "click", "effort/low", "")
+	waitUI("composer", `codex-model-effort">低</span>`)
 	event("composer", "click", "new", "")
 	waitUI("composer", "新会话")
 	event("composer", "input", "prompt", "wait")
+	event("composer", "click", "model-settings", "")
+	waitUI("models", "Fixture Luna")
+	event("composer", "click", "permission-settings", "")
+	waitUI("models", "") // Opening permissions closes the model menu.
+	waitUI("permissions", "完全访问权限")
+	event("permissions", "click", "permission/auto", "")
+	if ui := waitUI("composer", "帮我批准"); !strings.Contains(ui.View.HTML, ">wait</textarea>") || !strings.Contains(ui.View.HTML, `aria-label="选择模型" aria-expanded="false"`) {
+		t.Fatal("permission selection lost the draft or left models open", ui.View.HTML)
+	}
 	event("composer", "click", "send", "")
-	waitUI("thread2", "正在工作")
+	waitUI("thread2", "Thread permissions: on-request/auto_review/workspace-write; Turn permissions: on-request/auto_review/workspaceWrite; network=false; Effort: low")
+	// Changing the preset while busy applies only to the next turn.
+	event("composer", "click", "permission-settings", "")
+	waitUI("permissions", `data-ref="permission/auto" aria-checked="true"`)
+	event("permissions", "click", "permission/full", "")
+	waitUI("composer", "完全访问</span>")
 	event("composer", "click", "stop", "")
 	waitUI("thread2", "会话记录")
 	event("thread1", "close", "", "")
@@ -278,9 +348,58 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	// A failed turn must preserve the user's input instead of silently losing it.
 	event("composer", "input", "prompt", "fail")
 	event("composer", "click", "send", "")
+	waitUI("thread1", "Thread permissions: never/user/danger-full-access; Turn permissions: never/user/dangerFullAccess")
 	ui = waitUI("composer", "fixture failure")
 	if !strings.Contains(ui.View.HTML, ">fail</textarea>") {
 		t.Fatal("failed request lost the draft")
+	}
+	// Downgrading a loaded conversation must replace its full-access turn policy.
+	event("composer", "click", "permission-settings", "")
+	waitUI("permissions", `data-ref="permission/full" aria-checked="true"`)
+	event("permissions", "click", "permission/ask", "")
+	waitUI("composer", "请批准</span>")
+	event("composer", "input", "prompt", "wait")
+	event("composer", "click", "send", "")
+	waitUI("thread1", "Thread permissions: never/user/danger-full-access; Turn permissions: on-request/user/workspaceWrite; network=false; Effort: low")
+	event("composer", "click", "stop", "")
+	waitUI("thread1", "会话记录")
+	// Full access also reaches newly created threads, not only resumed ones.
+	event("composer", "click", "new", "")
+	waitUI("composer", "新会话")
+	event("composer", "click", "permission-settings", "")
+	waitUI("permissions", "完全访问权限")
+	event("permissions", "click", "permission/full", "")
+	waitUI("composer", "完全访问</span>")
+	event("composer", "input", "prompt", "wait")
+	event("composer", "click", "send", "")
+	waitUI("thread3", "Thread permissions: never/user/danger-full-access; Turn permissions: never/user/dangerFullAccess")
+	event("composer", "click", "permission-settings", "")
+	waitUI("permissions", "完全访问权限")
+	event("composer", "visibilitychange", "", "hidden")
+	if ui := waitUI("permissions", ""); !ui.Close {
+		t.Fatal("hidden composer left permission menu open")
+	}
+	// Menu selections must reach disk and restore without this agent's state.
+	restarted := &agent{}
+	if err := restarted.setContext(ctx); err != nil || restarted.model != "fixture-luna" || restarted.effort != "low" || restarted.permissionIndex != 2 {
+		t.Fatalf("menu selections were not persisted: model=%q permission=%d err=%v", restarted.model, restarted.permissionIndex, err)
+	}
+	action()
+	waitUI("composer", "")
+	projectContext := ctx
+	ctx.ProjectPath = t.TempDir()
+	action()
+	ui = waitUI("composer", "请批准</span>")
+	if !strings.Contains(ui.View.HTML, "><span>默认</span>") || strings.Contains(ui.View.HTML, "Fixture Luna") {
+		t.Fatal("new project inherited model settings", ui.View.HTML)
+	}
+	action()
+	waitUI("composer", "")
+	ctx = projectContext
+	action()
+	ui = waitUI("composer", "完全访问</span>")
+	if !strings.Contains(ui.View.HTML, "Fixture Luna") {
+		t.Fatal("returning to project did not restore model", ui.View.HTML)
 	}
 	write(peb.Shutdown, 0, nil)
 	select {
@@ -387,6 +506,13 @@ func TestLiveAppServer(t *testing.T) {
 		t.Fatal("empty model catalog")
 	}
 	validateBindings(t, a.modelsView())
+	for _, m := range a.models {
+		if len(m.SupportedReasoningEfforts) != 0 {
+			a.pendingModel = m.Model
+			validateBindings(t, a.modelsView())
+		}
+	}
+	a.pendingModel = ""
 	root := t.TempDir()
 	started, err := call[struct {
 		Thread thread `json:"thread"`

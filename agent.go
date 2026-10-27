@@ -88,12 +88,15 @@ type agent struct {
 	selected                           *conversation
 	drafts                             map[string]string
 	model, status                      string
+	effort, pendingModel               string
 	history                            threadPage
 	showHistory, panelOpen, panelDirty bool
 	composerMenu, modelSettings        bool
 	models                             []modelOption
 	modelsLoaded                       bool
 	modelError                         string
+	permissionIndex                    int
+	permissionSettings, permissionHelp bool
 }
 
 func (a *agent) run() {
@@ -117,7 +120,7 @@ func (a *agent) run() {
 			if err := a.handleCommand(cmd); err != nil {
 				a.status = err.Error()
 				c := a.conversations[cmd.event.ID]
-				if c == nil && cmd.event.ID == "composer" {
+				if c == nil && (cmd.event.ID == "composer" || cmd.event.ID == "models" || cmd.event.ID == "permissions") {
 					c = a.selected
 				}
 				if c != nil {
@@ -206,38 +209,39 @@ func (a *agent) connect() error {
 
 func (a *agent) handleCommand(cmd command) error {
 	if cmd.action {
-		if a.context.ProjectPath != cmd.context.ProjectPath {
-			a.history = threadPage{}
-			a.showHistory = false
-			a.status = ""
-		}
-		a.context = cmd.context
+		err := a.setContext(cmd.context)
 		// Keep each project's composer independent when switching workspaces.
 		if a.selected != nil && a.selected.Cwd != cmd.context.ProjectPath {
 			a.selected = nil
 		}
 		a.panelOpen = !a.panelOpen
 		if !a.panelOpen {
-			if err := a.closeModels(); err != nil {
+			if err := a.closeComposerMenus(); err != nil {
 				return err
 			}
-			return a.publisher.CloseUI("composer")
+			if closeErr := a.publisher.CloseUI("composer"); closeErr != nil {
+				return closeErr
+			}
+			return err
 		}
 		a.panelDirty = true
-		return nil
+		return err
 	}
 	e := cmd.event
 	if e.ID == "models" {
 		return a.handleModelEvent(e.Event)
 	}
+	if e.ID == "permissions" {
+		return a.handlePermissionEvent(e.Event)
+	}
 	if e.ID == "composer" {
 		switch e.Event.Kind {
 		case "close":
 			a.panelOpen = false
-			return a.closeModels()
+			return a.closeComposerMenus()
 		case "visibilitychange":
 			if e.Event.Value == "hidden" {
-				return a.closeModels()
+				return a.closeComposerMenus()
 			}
 		case "input":
 			if e.Event.Ref == "prompt" {
@@ -267,7 +271,12 @@ func (a *agent) handleCommand(cmd command) error {
 			case "composer-menu":
 				a.composerMenu = !a.composerMenu
 				a.panelDirty = true
-				return a.closeModels()
+				return a.closeComposerMenus()
+			case "permission-settings":
+				if a.permissionSettings {
+					return a.closePermissions()
+				}
+				return a.openPermissions()
 			case "model-settings":
 				if a.modelSettings {
 					return a.closeModels()
@@ -296,9 +305,10 @@ func (a *agent) handleCommand(cmd command) error {
 		}
 	case "visibilitychange":
 		if e.Event.Value == "visible" {
+			err := a.setContext(c.context)
 			a.selected = c
-			a.context = c.context
 			a.panelDirty = true
+			return err
 		}
 	case "input":
 		parts := strings.SplitN(e.Event.Ref, "/", 3)
@@ -314,10 +324,11 @@ func (a *agent) handleCommand(cmd command) error {
 			return a.loadHistory(c)
 		}
 		if e.Event.Ref == "compose" {
+			err := a.setContext(c.context)
 			a.selected = c
-			a.context = c.context
 			a.panelOpen = true
 			a.panelDirty = true
+			return err
 		}
 		if e.Event.Ref == "stop" {
 			return a.interrupt(c)
@@ -331,10 +342,13 @@ func (a *agent) handleCommand(cmd command) error {
 }
 
 func (a *agent) startThread(prompt string) (*conversation, error) {
-	params := map[string]any{"cwd": a.context.ProjectPath, "approvalPolicy": "on-request", "sandbox": "workspace-write"}
-	if a.model != "" {
-		params["model"] = a.model
-	}
+	p := a.permission()
+	params := struct {
+		Cwd     string `json:"cwd"`
+		Model   string `json:"model,omitempty"`
+		Sandbox string `json:"sandbox"`
+		approvalSettings
+	}{a.context.ProjectPath, a.model, p.sandbox, p.approvalSettings}
 	result, err := call[struct {
 		Thread thread `json:"thread"`
 	}](a.client, "thread/start", params)
@@ -402,10 +416,15 @@ func (a *agent) send() error {
 	// revealing it again when another conversation is selected.
 	c.open, c.dirty = true, true
 	a.flush()
-	params := map[string]any{"threadId": c.ID, "input": []input{{Type: "text", Text: prompt, TextElements: []struct{}{}}}}
-	if a.model != "" {
-		params["model"] = a.model
-	}
+	p := a.permission()
+	params := struct {
+		ThreadID      string        `json:"threadId"`
+		Input         [1]input      `json:"input"`
+		Model         string        `json:"model,omitempty"`
+		Effort        string        `json:"effort,omitempty"`
+		SandboxPolicy sandboxPolicy `json:"sandboxPolicy"`
+		approvalSettings
+	}{c.ID, [1]input{{Type: "text", Text: prompt, TextElements: []struct{}{}}}, a.model, a.turnEffort(), p.policy, p.approvalSettings}
 	c.busy = true
 	c.status = ""
 	result, err := call[struct {
@@ -465,9 +484,15 @@ func (a *agent) resume(id string) error {
 	}
 	c := a.conversations[id]
 	if c == nil || !c.loaded {
+		p := a.permission()
 		result, err := call[struct {
 			Thread thread `json:"thread"`
-		}](a.client, "thread/resume", map[string]any{"threadId": id, "excludeTurns": true, "approvalPolicy": "on-request", "sandbox": "workspace-write"})
+		}](a.client, "thread/resume", struct {
+			ThreadID     string `json:"threadId"`
+			ExcludeTurns bool   `json:"excludeTurns"`
+			Sandbox      string `json:"sandbox"`
+			approvalSettings
+		}{id, true, p.sandbox, p.approvalSettings})
 		if err != nil {
 			return err
 		}
@@ -484,8 +509,10 @@ func (a *agent) resume(id string) error {
 			return err
 		}
 	}
+	if err := a.setContext(c.context); err != nil {
+		return err
+	}
 	a.selected = c
-	a.context = c.context
 	a.showHistory = false
 	wasOpen := c.open
 	c.open, c.dirty = true, true

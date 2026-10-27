@@ -20,10 +20,13 @@
 .codex-input-footer img { display: block; flex-shrink: 0; width: 16px; height: 16px; }
 .codex-input-spacer { flex: 1; min-width: 0; }
 .codex-composer .codex-add { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 20px; height: 28px; min-height: 28px; padding: 0; border-radius: 5px; background: transparent; }
-.codex-access { display: flex; align-items: center; gap: 5px; flex-shrink: 0; color: #f47a3c; font-size: 12px; white-space: nowrap; }
+.codex-composer .codex-access { display: flex; align-items: center; gap: 5px; flex-shrink: 0; height: 28px; min-height: 28px; padding: 0 8px; border-radius: 14px; color: var(--vscode-input-foreground); background: transparent; font-size: 12px; white-space: nowrap; }
+.codex-composer .codex-access-full { color: #f47a3c; background: var(--vscode-toolbar-hoverBackground); }
+.codex-composer .codex-access:hover, .codex-composer .codex-access[aria-expanded="true"] { background: var(--vscode-toolbar-hoverBackground); }
 .codex-access img { width: 14px; height: 14px; }
 .codex-composer .codex-model-select { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 240px; height: 28px; padding: 0 10px; border-radius: 14px; color: var(--vscode-input-foreground); background: transparent; font-size: 12px; }
 .codex-model-select span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codex-model-select .codex-model-effort { flex-shrink: 0; color: var(--vscode-textLink-foreground); }
 .codex-model-select img { width: 12px; height: 12px; }
 .codex-composer .codex-add:hover, .codex-composer .codex-model-select:hover { background: var(--vscode-toolbar-hoverBackground); }
 .codex-composer .codex-model-select[aria-expanded="true"] { background: var(--vscode-toolbar-hoverBackground); }
@@ -39,6 +42,21 @@
 .codex-model-menu button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .codex-model-menu button img { flex-shrink: 0; width: 14px; height: 14px; }
 .codex-model-message { margin: 4px; color: var(--vscode-descriptionForeground); font-size: 12px; overflow-wrap: anywhere; }
+.codex-permission-menu { padding: 2px 4px 4px; color: var(--vscode-editorWidget-foreground); font-size: 13px; line-height: 1.4; }
+.codex-permission-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 6px; }
+.codex-permission-header h3 { margin: 0; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 500; }
+.codex-permission-menu .codex-permission-help { flex-shrink: 0; min-height: 20px; padding: 0; border: 0; color: var(--vscode-descriptionForeground); background: transparent; font-size: 12px; text-decoration: underline; }
+.codex-permission-help:hover { color: var(--vscode-textLink-foreground); }
+.codex-permission-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin: 0; padding: 5px 4px; border: 0; border-radius: 5px; color: inherit; background: transparent; text-align: left; }
+.codex-permission-option:hover, .codex-permission-option:focus-visible { background: var(--vscode-list-hoverBackground); }
+.codex-permission-menu button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.codex-permission-icon, .codex-permission-check { flex-shrink: 0; width: 14px; height: 14px; }
+.codex-permission-copy { flex: 1; min-width: 0; }
+.codex-permission-label, .codex-permission-description { display: block; }
+.codex-permission-label { font-size: 13px; }
+.codex-permission-description { color: var(--vscode-descriptionForeground); font-size: 12px; overflow-wrap: anywhere; }
+.codex-permission-full, .codex-permission-full .codex-permission-description { color: #f47a3c; }
+.codex-permission-explanation { margin: 6px 4px 2px; padding-top: 8px; border-top: 1px solid var(--vscode-editorGroup-border); color: var(--vscode-descriptionForeground); font-size: 12px; }
 .codex-message { margin: 20px 0; padding: 12px 16px; border: 1px solid var(--vscode-editorGroup-border); border-radius: 6px; overflow-wrap: anywhere; }
 .codex-user { background: var(--vscode-editorWidget-background); }
 .codex-message h3, .codex-approval h3, .codex-history h3 { font-size: 12px; margin: 0 0 8px; color: var(--vscode-descriptionForeground); }

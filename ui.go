@@ -43,6 +43,7 @@ func (a *agent) flush() {
 
 func (a *agent) composerView() *peb.EditorView {
 	var b strings.Builder
+	p := a.permission()
 	draft, title := a.drafts[a.context.ProjectPath], "新会话"
 	busy := false
 	if a.selected != nil {
@@ -54,20 +55,40 @@ func (a *agent) composerView() *peb.EditorView {
 	b.WriteString(html.EscapeString(draft))
 	b.WriteString(`</textarea><div class="codex-input-footer"><button data-ref="composer-menu" class="codex-add" type="button" title="新建与历史会话" aria-label="新建与历史会话" aria-expanded="`)
 	b.WriteString(strconv.FormatBool(a.composerMenu))
-	b.WriteString(`"><img src="resources/icons/plus.svg" alt=""></button><span class="codex-access" title="当前工作区可写；超出权限时需确认。`)
-	b.WriteString(html.EscapeString(a.context.ProjectPath))
-	b.WriteString(`"><img src="resources/icons/shield-alert.svg" alt=""><span>工作区访问</span></span><span class="codex-input-spacer"></span><button data-ref="model-settings" class="codex-model-select" type="button" aria-haspopup="menu" title="选择模型" aria-label="选择模型" aria-expanded="`)
+	b.WriteString(`"><img src="resources/icons/plus.svg" alt=""></button><button data-ref="permission-settings" class="codex-access`)
+	if p.sandbox == "danger-full-access" {
+		b.WriteString(` codex-access-full`)
+	}
+	b.WriteString(`" type="button" aria-haspopup="menu" aria-label="权限设置" aria-expanded="`)
+	b.WriteString(strconv.FormatBool(a.permissionSettings))
+	b.WriteString(`" title="`)
+	b.WriteString(p.description)
+	b.WriteString(`；从下一次发送开始生效"><img src="resources/icons/`)
+	b.WriteString(p.icon)
+	b.WriteString(`.svg" alt=""><span>`)
+	if p.sandbox == "danger-full-access" {
+		b.WriteString("完全访问")
+	} else {
+		b.WriteString(p.label)
+	}
+	b.WriteString(`</span></button><span class="codex-input-spacer"></span><button data-ref="model-settings" class="codex-model-select" type="button" aria-haspopup="menu" title="选择模型" aria-label="选择模型" aria-expanded="`)
 	b.WriteString(strconv.FormatBool(a.modelSettings))
 	b.WriteString(`"><span>`)
 	b.WriteString(html.EscapeString(a.modelLabel()))
-	b.WriteString(`</span><img src="resources/icons/chevron-down.svg" alt=""></button>`)
+	b.WriteString(`</span>`)
+	if a.effort != "" {
+		b.WriteString(`<span class="codex-model-effort">`)
+		b.WriteString(html.EscapeString(effortLabel(a.effort)))
+		b.WriteString(`</span>`)
+	}
+	b.WriteString(`<img src="resources/icons/chevron-down.svg" alt=""></button>`)
 	if busy {
 		b.WriteString(`<button data-ref="stop" class="codex-send" type="button" title="停止任务" aria-label="停止任务"><img src="resources/icons/square.svg" alt=""></button>`)
 	} else {
 		b.WriteString(`<button data-ref="send" class="codex-send" type="button" title="发送" aria-label="发送"><img src="resources/icons/arrow-up.svg" alt=""></button>`)
 	}
 	b.WriteString(`</div></form>`)
-	bindings := []peb.EditorBinding{{Ref: "prompt", Kind: "input"}, {Ref: "form", Kind: "submit"}, {Ref: "composer-menu", Kind: "click"}, {Ref: "model-settings", Kind: "click"}}
+	bindings := []peb.EditorBinding{{Ref: "prompt", Kind: "input"}, {Ref: "form", Kind: "submit"}, {Ref: "composer-menu", Kind: "click"}, {Ref: "permission-settings", Kind: "click"}, {Ref: "model-settings", Kind: "click"}}
 	if a.composerMenu {
 		b.WriteString(`<div class="codex-composer-options" role="group" aria-label="会话操作"><button data-ref="new" type="button">新会话</button><button data-ref="history" type="button">历史会话</button></div>`)
 		bindings = append(bindings, peb.EditorBinding{Ref: "new", Kind: "click"}, peb.EditorBinding{Ref: "history", Kind: "click"})
