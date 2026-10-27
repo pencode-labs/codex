@@ -13,7 +13,7 @@ import (
 func TestServerRequestsKeepWireIDsAndScopePermissions(t *testing.T) {
 	var output bytes.Buffer
 	c := &conversation{thread: thread{ID: "thread"}}
-	a := &agent{client: &rpcClient{writer: json.NewEncoder(&output)}, conversations: map[string]*conversation{c.ID: c}}
+	a := &agent{client: &rpcClient{writer: json.NewEncoder(&output)}, selected: c, conversations: map[string]*conversation{c.ID: c}}
 	request := func(id, method, params string) {
 		t.Helper()
 		output.Reset()
@@ -21,7 +21,7 @@ func TestServerRequestsKeepWireIDsAndScopePermissions(t *testing.T) {
 		if len(c.requests) != 1 {
 			t.Fatal("request not retained")
 		}
-		validateBindings(t, c.view())
+		validateBindings(t, a.composerView())
 	}
 	request(`"command-id"`, "item/commandExecution/requestApproval", `{"threadId":"thread","command":"test"}`)
 	if err := a.answer(c, `"command-id"`, "decline"); err != nil {
@@ -52,7 +52,7 @@ func TestServerRequestsKeepWireIDsAndScopePermissions(t *testing.T) {
 	if err := a.answer(c, "4", "answer"); err == nil || output.Len() != 0 {
 		t.Fatal("empty answer was submitted")
 	}
-	if err := a.handleCommand(command{event: peb.UIEvent{ID: c.ID, Event: peb.EditorEvent{Kind: "input", Ref: "answer/4/choice", Value: "A"}}}); err != nil {
+	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "input", Ref: "answer/4/choice", Value: "A"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.answer(c, "4", "answer"); err != nil {

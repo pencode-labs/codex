@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,19 +25,27 @@ type change struct {
 	Path string `json:"path"`
 	Diff string `json:"diff"`
 }
+type commandAction struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Query   string `json:"query"`
+}
 type threadItem struct {
-	ID               string   `json:"id"`
-	Type             string   `json:"type"`
-	Text             string   `json:"text"`
-	Content          []input  `json:"content"`
-	Summary          []string `json:"summary"`
-	Command          string   `json:"command"`
-	Status           string   `json:"status"`
-	AggregatedOutput string   `json:"aggregatedOutput"`
-	Changes          []change `json:"changes"`
-	Server           string   `json:"server"`
-	Tool             string   `json:"tool"`
-	Query            string   `json:"query"`
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Text             string          `json:"text"`
+	Content          []input         `json:"content"`
+	Summary          []string        `json:"summary"`
+	Command          string          `json:"command"`
+	CommandActions   []commandAction `json:"commandActions"`
+	Status           string          `json:"status"`
+	AggregatedOutput string          `json:"aggregatedOutput"`
+	Changes          []change        `json:"changes"`
+	Server           string          `json:"server"`
+	Tool             string          `json:"tool"`
+	Query            string          `json:"query"`
 }
 type turn struct {
 	ID     string       `json:"id"`
@@ -48,13 +57,16 @@ type thread struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Preview string `json:"preview"`
-	Cwd     string `json:"cwd"`
 }
 type chatItem struct {
-	data         threadItem
-	text, output strings.Builder
-	complete     bool
-	html         string
+	data          threadItem
+	text, output  strings.Builder
+	complete      bool
+	expanded      bool
+	detailRef     string
+	groupRef      string
+	groupExpanded bool
+	html          string
 }
 type approval struct {
 	id      json.RawMessage
@@ -64,39 +76,68 @@ type approval struct {
 }
 type conversation struct {
 	thread
-	context                   peb.ActionContext
-	items                     []*chatItem
-	requests                  []*approval
-	draft, turnID, cursor     string
-	status                    string
-	turnRevision              uint64
-	busy, open, dirty, loaded bool
+	context               peb.ActionContext
+	items                 []*chatItem
+	requests              []*approval
+	draft, turnID, cursor string
+	status                string
+	turnRevision          uint64
+	busy, dirty, loaded   bool
 }
 type threadPage struct {
 	Data       []thread `json:"data"`
 	NextCursor string   `json:"nextCursor"`
 }
 
+func (p *threadPage) contains(id string) bool {
+	return slices.ContainsFunc(p.Data, func(t thread) bool { return t.ID == id })
+}
+
+func (p *threadPage) include(t thread) {
+	if !p.contains(t.ID) {
+		p.Data = slices.Insert(p.Data, 0, t)
+	}
+}
+
+func (p *threadPage) compact() {
+	data := p.Data
+	p.Data = data[:0]
+	for _, t := range data {
+		if t.ID != "" && !p.contains(t.ID) {
+			p.Data = append(p.Data, t)
+		}
+	}
+	clear(data[len(p.Data):])
+}
+
 type agent struct {
-	ctx                                context.Context
-	publisher                          *peb.ActionPublisher
-	commands                           chan command
-	done                               chan struct{}
-	client                             *rpcClient
-	context                            peb.ActionContext
-	conversations                      map[string]*conversation
-	selected                           *conversation
-	drafts                             map[string]string
-	model, status                      string
-	effort, pendingModel               string
-	history                            threadPage
-	showHistory, panelOpen, panelDirty bool
-	composerMenu, modelSettings        bool
-	models                             []modelOption
-	modelsLoaded                       bool
-	modelError                         string
-	permissionIndex                    int
-	permissionSettings, permissionHelp bool
+	ctx                                        context.Context
+	publisher                                  *peb.ActionPublisher
+	commands                                   chan command
+	pending                                    [64]command
+	pendingHead, pendingCount                  int
+	done                                       chan struct{}
+	client                                     *rpcClient
+	context                                    peb.ActionContext
+	conversations                              map[string]*conversation
+	selected                                   *conversation
+	drafts                                     map[string]string
+	attachments                                map[attachmentScope][]string
+	filePicker                                 *filePicker
+	model, status                              string
+	effort, pendingModel                       string
+	history                                    threadPage
+	showHistory, workspaceOpen, workspaceDirty bool
+	historyDirty                               bool
+	composerPrefix                             string
+	composerBindings                           []peb.EditorBinding
+	revealWorkspace                            bool
+	modelSettings                              bool
+	models                                     []modelOption
+	modelsLoaded                               bool
+	modelError                                 string
+	permissionIndex                            int
+	permissionSettings, permissionHelp         bool
 }
 
 func (a *agent) run() {
@@ -113,35 +154,29 @@ func (a *agent) run() {
 		if a.client != nil {
 			messages = a.client.messages
 		}
-		select {
-		case <-a.ctx.Done():
-			return
-		case cmd := <-a.commands:
-			if err := a.handleCommand(cmd); err != nil {
-				a.status = err.Error()
-				c := a.conversations[cmd.event.ID]
-				if c == nil && (cmd.event.ID == "composer" || cmd.event.ID == "models" || cmd.event.ID == "permissions") {
-					c = a.selected
+		if a.pendingCount > 0 {
+			cmd := a.pending[a.pendingHead]
+			a.pending[a.pendingHead] = command{}
+			a.pendingHead = (a.pendingHead + 1) % len(a.pending)
+			a.pendingCount--
+			a.processCommand(cmd)
+			a.workspaceDirty = true
+		} else {
+			select {
+			case <-a.ctx.Done():
+				return
+			case cmd := <-a.commands:
+				a.processCommand(cmd)
+			case message, ok := <-messages:
+				if !ok {
+					a.disconnected()
+					break
 				}
-				if c != nil {
-					c.status = err.Error()
-					c.dirty = true
-				}
-				if c != nil {
-					a.status = ""
-				}
-				a.panelDirty = true
-				fmt.Fprintln(stderrWriter, err)
+				a.onMessage(message)
+			case <-tick:
+				a.flush()
+				tick = nil
 			}
-		case message, ok := <-messages:
-			if !ok {
-				a.disconnected()
-				break
-			}
-			a.onMessage(message)
-		case <-tick:
-			a.flush()
-			tick = nil
 		}
 		if tick == nil && a.dirty() {
 			flush.Reset(80 * time.Millisecond)
@@ -150,16 +185,73 @@ func (a *agent) run() {
 	}
 }
 
-func (a *agent) dirty() bool {
-	if a.panelDirty && a.panelOpen {
-		return true
+func (a *agent) processCommand(cmd command) {
+	a.reportError(a.handleCommand(cmd))
+}
+
+func (a *agent) reportError(err error) {
+	if err == nil {
+		return
 	}
-	for _, c := range a.conversations {
-		if c.dirty && c.open {
-			return true
+	fmt.Fprintln(stderrWriter, err)
+	if err := a.publisher.Show(peb.UI{
+		ID: "error", Title: "Codex", Kind: peb.Notification, Context: a.context,
+		View: &peb.EditorView{HTML: "<p>" + html.EscapeString(err.Error()) + "</p>", CSS: "p { white-space: pre-wrap; }"},
+	}); err != nil {
+		fmt.Fprintln(stderrWriter, err)
+	}
+}
+
+// RPC waits still service tab lifecycle events. Other commands stay ordered
+// until the current request completes, without starting nested RPC calls.
+func (a *agent) handlePendingCommand(cmd command) {
+	if cmd.action && cmd.context.ProjectPath == a.context.ProjectPath {
+		a.reportError(a.openWorkspace(cmd.context))
+		return
+	}
+	if !cmd.action {
+		switch cmd.event.Event.Kind {
+		case "open", "close", "visibilitychange":
+			a.processCommand(cmd)
+			return
 		}
 	}
-	return false
+	if a.pendingCount == len(a.pending) {
+		a.reportError(fmt.Errorf("Codex 事件队列已满"))
+		return
+	}
+	a.pending[(a.pendingHead+a.pendingCount)%len(a.pending)] = cmd
+	a.pendingCount++
+}
+
+func (a *agent) dirty() bool {
+	return a.workspaceOpen && (a.workspaceDirty || a.historyDirty || a.selected != nil && a.selected.dirty)
+}
+
+// Keep drafts and running tasks when leaving a conversation; reload idle output
+// from Codex on return instead of retaining every visited transcript.
+func (a *agent) selectConversation(c *conversation) {
+	if a.selected != c {
+		if previous := a.selected; previous != nil && !previous.busy {
+			previous.items = nil
+			previous.loaded = false
+		}
+		a.selected = c
+	}
+	a.workspaceDirty = true
+}
+
+func (a *agent) closeWorkspace() error {
+	a.workspaceOpen, a.revealWorkspace = false, false
+	a.composerPrefix, a.composerBindings = "", nil
+	// Keep the selected transcript so reopening does not require another RPC.
+	for _, c := range a.conversations {
+		if c != a.selected && !c.busy {
+			c.items = nil
+			c.loaded = false
+		}
+	}
+	return a.closeComposerMenus()
 }
 
 func (a *agent) disconnected() {
@@ -175,7 +267,7 @@ func (a *agent) disconnected() {
 		c.status = a.status
 		c.dirty = true
 	}
-	a.panelDirty = true
+	a.workspaceDirty = true
 }
 
 func (a *agent) connect() error {
@@ -194,6 +286,7 @@ func (a *agent) connect() error {
 		return err
 	}
 	a.client = client
+	client.commands, client.dispatch = a.commands, a.handlePendingCommand
 	_, err = call[json.RawMessage](client, "initialize", map[string]any{"clientInfo": map[string]string{"name": "pencode_codex", "title": "Pencode Codex Agent", "version": "0.1.0"}})
 	if err == nil {
 		err = client.notify("initialized", struct{}{})
@@ -207,25 +300,29 @@ func (a *agent) connect() error {
 	return nil
 }
 
+func (a *agent) openWorkspace(ctx peb.ActionContext) error {
+	err := a.setContext(ctx)
+	a.revealWorkspace = a.workspaceOpen
+	a.workspaceOpen, a.workspaceDirty = true, true
+	if err != nil {
+		return err
+	}
+	// Open or reveal the tab before waiting for app-server or stored history.
+	a.flush()
+	return nil
+}
+
 func (a *agent) handleCommand(cmd command) error {
 	if cmd.action {
-		err := a.setContext(cmd.context)
-		// Keep each project's composer independent when switching workspaces.
-		if a.selected != nil && a.selected.Cwd != cmd.context.ProjectPath {
-			a.selected = nil
-		}
-		a.panelOpen = !a.panelOpen
-		if !a.panelOpen {
-			if err := a.closeComposerMenus(); err != nil {
-				return err
-			}
-			if closeErr := a.publisher.CloseUI("composer"); closeErr != nil {
-				return closeErr
-			}
+		if err := a.openWorkspace(cmd.context); err != nil {
 			return err
 		}
-		a.panelDirty = true
-		return err
+		if a.selected != nil && !a.selected.loaded {
+			if err := a.resume(a.selected.ID); err != nil {
+				return err
+			}
+		}
+		return a.listHistory("")
 	}
 	e := cmd.event
 	if e.ID == "models" {
@@ -234,108 +331,117 @@ func (a *agent) handleCommand(cmd command) error {
 	if e.ID == "permissions" {
 		return a.handlePermissionEvent(e.Event)
 	}
-	if e.ID == "composer" {
-		switch e.Event.Kind {
-		case "close":
-			a.panelOpen = false
-			return a.closeComposerMenus()
-		case "visibilitychange":
-			if e.Event.Value == "hidden" {
-				return a.closeComposerMenus()
-			}
-		case "input":
-			if e.Event.Ref == "prompt" {
-				if a.selected != nil {
-					a.selected.draft = e.Event.Value
-				} else {
-					a.drafts[a.context.ProjectPath] = e.Event.Value
-				}
-			}
-		case "submit":
-			return a.send()
-		case "click":
-			switch e.Event.Ref {
-			case "send":
-				return a.send()
-			case "new":
-				a.composerMenu = false
-				a.selected = nil
-				a.status = ""
-				a.showHistory = false
-				a.panelDirty = true
-			case "stop":
-				return a.interrupt(a.selected)
-			case "history":
-				a.composerMenu = false
-				return a.listHistory("")
-			case "composer-menu":
-				a.composerMenu = !a.composerMenu
-				a.panelDirty = true
-				return a.closeComposerMenus()
-			case "permission-settings":
-				if a.permissionSettings {
-					return a.closePermissions()
-				}
-				return a.openPermissions()
-			case "model-settings":
-				if a.modelSettings {
-					return a.closeModels()
-				}
-				return a.openModels()
-			case "more-history":
-				return a.listHistory(a.history.NextCursor)
-			default:
-				if id, ok := strings.CutPrefix(e.Event.Ref, "history/"); ok {
-					return a.resume(id)
-				}
-			}
+	if e.ID == "files" {
+		return a.handleFileEvent(e.Event)
+	}
+	if e.ID != "composer" {
+		return nil
+	}
+	if e.Event.Kind == "projectchange" {
+		if e.Context.ProjectPath == a.context.ProjectPath {
+			return nil
+		}
+		if err := a.setContext(e.Context); err != nil {
+			return err
+		}
+		a.flush()
+		if filepath.IsAbs(a.context.ProjectPath) {
+			return a.listHistory("")
 		}
 		return nil
 	}
-	c := a.conversations[e.ID]
-	if c == nil {
-		return nil
-	}
+	c := a.selected
 	switch e.Event.Kind {
 	case "close":
-		c.open = false
-		if !c.busy {
-			c.items = nil
-			c.loaded = false
-		}
+		return a.closeWorkspace()
 	case "visibilitychange":
-		if e.Event.Value == "visible" {
-			err := a.setContext(c.context)
-			a.selected = c
-			a.panelDirty = true
-			return err
+		if e.Event.Value == "hidden" {
+			return a.closeComposerMenus()
 		}
 	case "input":
-		parts := strings.SplitN(e.Event.Ref, "/", 3)
-		if len(parts) == 3 && parts[0] == "answer" {
-			for _, r := range c.requests {
-				if string(r.id) == parts[1] {
-					r.answers[parts[2]] = e.Event.Value
+		if e.Event.Ref == "prompt" {
+			if c != nil {
+				c.draft = e.Event.Value
+			} else {
+				a.drafts[a.context.ProjectPath] = e.Event.Value
+			}
+		} else if c != nil {
+			parts := strings.SplitN(e.Event.Ref, "/", 3)
+			if len(parts) == 3 && parts[0] == "answer" {
+				for _, r := range c.requests {
+					if string(r.id) == parts[1] {
+						r.answers[parts[2]] = e.Event.Value
+					}
 				}
 			}
 		}
+	case "submit":
+		return a.send()
 	case "click":
-		if e.Event.Ref == "older" {
-			return a.loadHistory(c)
-		}
-		if e.Event.Ref == "compose" {
-			err := a.setContext(c.context)
-			a.selected = c
-			a.panelOpen = true
-			a.panelDirty = true
-			return err
-		}
-		if e.Event.Ref == "stop" {
+		switch e.Event.Ref {
+		case "send":
+			return a.send()
+		case "new":
+			if err := a.closeComposerMenus(); err != nil {
+				return err
+			}
+			a.selectConversation(nil)
+			a.status = ""
+		case "stop":
 			return a.interrupt(c)
-		}
-		parts := strings.SplitN(e.Event.Ref, "/", 2)
-		if len(parts) == 2 && (parts[0] == "accept" || parts[0] == "decline" || parts[0] == "answer") {
-			return a.answer(c, parts[1], parts[0])
+		case "history", "refresh-history":
+			return a.listHistory("")
+		case "add-file":
+			return a.openFiles()
+		case "permission-settings":
+			if a.permissionSettings {
+				return a.closePermissions()
+			}
+			return a.openPermissions()
+		case "model-settings":
+			if a.modelSettings {
+				return a.closeModels()
+			}
+			return a.openModels()
+		case "more-history":
+			return a.listHistory(a.history.NextCursor)
+		case "older":
+			if c != nil {
+				return a.loadHistory(c)
+			}
+		default:
+			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-file/"); ok {
+				a.removeAttachment(index)
+				return nil
+			}
+			if c != nil && strings.HasPrefix(e.Event.Ref, "item/") {
+				for _, i := range c.items {
+					if i.detailRef == e.Event.Ref {
+						i.expanded = !i.expanded
+						i.html = ""
+						c.dirty = true
+						break
+					}
+				}
+				return nil
+			}
+			if c != nil && strings.HasPrefix(e.Event.Ref, "activity/") {
+				for _, i := range c.items {
+					if i.groupRef == e.Event.Ref {
+						i.groupExpanded = !i.groupExpanded
+						c.dirty = true
+						break
+					}
+				}
+				return nil
+			}
+			if id, ok := strings.CutPrefix(e.Event.Ref, "history/"); ok {
+				return a.resume(id)
+			}
+			parts := strings.SplitN(e.Event.Ref, "/", 2)
+			if c != nil && len(parts) == 2 && (parts[0] == "accept" || parts[0] == "decline" || parts[0] == "answer") {
+				return a.answer(c, parts[1], parts[0])
+			}
 		}
 	}
 	return nil
@@ -358,13 +464,12 @@ func (a *agent) startThread(prompt string) (*conversation, error) {
 	if result.Thread.ID == "" {
 		return nil, fmt.Errorf("Codex 未返回会话 ID")
 	}
-	c := &conversation{thread: result.Thread, context: a.context, loaded: true, open: true, dirty: true}
-	if c.Cwd == "" {
-		c.Cwd = a.context.ProjectPath
-	}
+	c := &conversation{thread: result.Thread, context: a.context, loaded: true, dirty: true}
 	c.Name = shortTitle(prompt)
 	a.conversations[c.ID] = c
-	a.selected = c
+	a.history.include(c.thread)
+	a.showHistory = true
+	a.selectConversation(c)
 	return c, nil
 }
 
@@ -387,7 +492,9 @@ func (a *agent) send() error {
 		prompt = c.draft
 		a.context = c.context
 	}
-	if strings.TrimSpace(prompt) == "" {
+	scope := a.attachmentScope()
+	files := a.attachments[scope]
+	if strings.TrimSpace(prompt) == "" && len(files) == 0 {
 		return nil
 	}
 	if c != nil && c.busy {
@@ -399,11 +506,19 @@ func (a *agent) send() error {
 	fresh := c == nil
 	if fresh {
 		var err error
-		c, err = a.startThread(prompt)
+		title := prompt
+		if strings.TrimSpace(title) == "" {
+			title = filepath.Base(files[0])
+		}
+		c, err = a.startThread(title)
 		if err != nil {
 			return err
 		}
 		c.draft = prompt
+		if len(files) > 0 {
+			a.attachments[a.attachmentScope()] = files
+			delete(a.attachments, scope)
+		}
 	} else if !c.loaded {
 		if err := a.resume(c.ID); err != nil {
 			return err
@@ -412,9 +527,9 @@ func (a *agent) send() error {
 	if c.busy {
 		return fmt.Errorf("当前会话仍有任务在运行，请等待完成或点击停止")
 	}
-	// Publish a fresh tab before starting work, then stream updates without
-	// revealing it again when another conversation is selected.
-	c.open, c.dirty = true, true
+	// Show the stop action before waiting for turn/start to acknowledge the task.
+	c.busy, c.dirty = true, true
+	c.status = ""
 	a.flush()
 	p := a.permission()
 	params := struct {
@@ -424,9 +539,7 @@ func (a *agent) send() error {
 		Effort        string        `json:"effort,omitempty"`
 		SandboxPolicy sandboxPolicy `json:"sandboxPolicy"`
 		approvalSettings
-	}{c.ID, [1]input{{Type: "text", Text: prompt, TextElements: []struct{}{}}}, a.model, a.turnEffort(), p.policy, p.approvalSettings}
-	c.busy = true
-	c.status = ""
+	}{c.ID, [1]input{{Type: "text", Text: attachmentPrompt(prompt, files), TextElements: []struct{}{}}}, a.model, a.turnEffort(), p.policy, p.approvalSettings}
 	result, err := call[struct {
 		Turn turn `json:"turn"`
 	}](a.client, "turn/start", params)
@@ -440,11 +553,12 @@ func (a *agent) send() error {
 		c.turnID = result.Turn.ID
 	}
 	c.draft = ""
+	delete(a.attachments, a.attachmentScope())
 	if fresh {
 		delete(a.drafts, a.context.ProjectPath)
 	}
 	a.status = ""
-	a.panelDirty, c.dirty = true, true
+	a.workspaceDirty, c.dirty = true, true
 	if fresh {
 		_, err = call[json.RawMessage](a.client, "thread/name/set", map[string]string{"threadId": c.ID, "name": c.Name})
 		if err != nil {
@@ -466,15 +580,29 @@ func (a *agent) listHistory(cursor string) error {
 	if err := a.connect(); err != nil {
 		return err
 	}
-	page, err := call[threadPage](a.client, "thread/list", map[string]any{"cwd": a.context.ProjectPath, "limit": 20, "sortKey": "updated_at", "cursor": cursor})
+	page, err := call[threadPage](a.client, "thread/list", struct {
+		Cwd         string    `json:"cwd"`
+		Limit       int       `json:"limit"`
+		SortKey     string    `json:"sortKey"`
+		Cursor      string    `json:"cursor,omitempty"`
+		SourceKinds [3]string `json:"sourceKinds"`
+	}{a.context.ProjectPath, 20, "updated_at", cursor, [3]string{"cli", "vscode", "appServer"}})
 	if err != nil {
 		return err
 	}
+	page.compact()
 	if cursor != "" {
+		page.Data = slices.DeleteFunc(page.Data, func(t thread) bool { return a.history.contains(t.ID) })
 		page.Data = append(a.history.Data, page.Data...)
 	}
+	// Newly started threads may not have reached the server's history index yet.
+	for _, c := range a.conversations {
+		if c.context.ProjectPath == a.context.ProjectPath {
+			page.include(c.thread)
+		}
+	}
 	a.history = page
-	a.showHistory, a.panelDirty = true, true
+	a.showHistory, a.historyDirty = true, true
 	return nil
 }
 
@@ -512,15 +640,10 @@ func (a *agent) resume(id string) error {
 	if err := a.setContext(c.context); err != nil {
 		return err
 	}
-	a.selected = c
-	a.showHistory = false
-	wasOpen := c.open
-	c.open, c.dirty = true, true
-	a.panelDirty = true
-	a.flush()
-	if wasOpen {
-		return a.publisher.Show(peb.UI{ID: c.ID, Title: c.title(), Kind: peb.EditorTab, Context: c.context})
-	}
+	a.history.include(c.thread)
+	a.showHistory = true
+	a.selectConversation(c)
+	c.dirty = true
 	return nil
 }
 
@@ -539,7 +662,13 @@ func (a *agent) loadHistory(c *conversation) error {
 	page, err := call[struct {
 		Data       []turn `json:"data"`
 		NextCursor string `json:"nextCursor"`
-	}](a.client, "thread/turns/list", map[string]any{"threadId": c.ID, "limit": 10, "sortDirection": "desc", "itemsView": "full", "cursor": c.cursor})
+	}](a.client, "thread/turns/list", struct {
+		ThreadID      string `json:"threadId"`
+		Limit         int    `json:"limit"`
+		SortDirection string `json:"sortDirection"`
+		ItemsView     string `json:"itemsView"`
+		Cursor        string `json:"cursor,omitempty"`
+	}{c.ID, 10, "desc", "full", c.cursor})
 	if err != nil {
 		return err
 	}
@@ -646,7 +775,7 @@ func (a *agent) onMessage(message envelope) {
 		default:
 			_ = a.client.reply(message.ID, nil, &rpcError{Code: -32601, Message: "Pencode does not implement " + message.Method})
 			a.status = "暂不支持 Codex 请求：" + message.Method
-			a.panelDirty = true
+			a.workspaceDirty = true
 		}
 		c.dirty = true
 		return
@@ -664,25 +793,29 @@ func (a *agent) onMessage(message envelope) {
 		i.html = ""
 	case "thread/name/updated":
 		c.Name = event.ThreadName
+		for i := range a.history.Data {
+			if a.history.Data[i].ID == c.ID {
+				a.history.Data[i].Name = c.Name
+				a.workspaceDirty = true
+			}
+		}
 	case "turn/started":
 		c.turnRevision++
 		c.busy = true
 		c.status = ""
 		c.turnID = event.Turn.ID
-		a.panelDirty = true
 	case "turn/completed":
 		c.turnRevision++
 		c.busy = false
 		c.turnID = ""
 		c.requests = nil
-		a.panelDirty = true
 		if event.Turn.Error != nil {
 			c.status = event.Turn.Error.Message
 		}
 		if event.Turn.Status == "interrupted" {
 			c.status = "任务已停止"
 		}
-		if !c.open {
+		if !a.workspaceOpen || a.selected != c {
 			c.items = nil
 			c.loaded = false
 		}
@@ -691,7 +824,6 @@ func (a *agent) onMessage(message envelope) {
 	case "error":
 		if event.Error != nil {
 			c.status = event.Error.Message
-			a.panelDirty = true
 		}
 	default:
 		return

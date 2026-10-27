@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func TestProjectSettingsSurviveRestart(t *testing.T) {
 		}
 		// A new agent has no in-memory state from the process that saved it.
 		restarted := &agent{}
-		if err := restarted.handleCommand(command{action: true, context: peb.ActionContext{ProjectPath: root}}); err != nil {
+		if err := restarted.setContext(peb.ActionContext{ProjectPath: root}); err != nil {
 			t.Fatal(err)
 		}
 		if restarted.model != "saved-model" || restarted.effort != "high" || restarted.permissionIndex != i {
@@ -51,7 +52,7 @@ func TestProjectSettingsSurviveRestart(t *testing.T) {
 	}
 }
 
-func TestProjectSettingsFollowActionsAndConversationTabs(t *testing.T) {
+func TestProjectSettingsFollowWorkspaceAndConversationSelection(t *testing.T) {
 	first, second, fresh := t.TempDir(), t.TempDir(), t.TempDir()
 	a := &agent{}
 	for _, setting := range []struct {
@@ -65,7 +66,7 @@ func TestProjectSettingsFollowActionsAndConversationTabs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := a.handleCommand(command{action: true, context: peb.ActionContext{ProjectPath: fresh}}); err != nil {
+	if err := a.setContext(peb.ActionContext{ProjectPath: fresh}); err != nil {
 		t.Fatal(err)
 	}
 	if a.model != "" || a.effort != "" || a.permissionIndex != 0 {
@@ -74,24 +75,21 @@ func TestProjectSettingsFollowActionsAndConversationTabs(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(fresh, ".pencode")); !os.IsNotExist(err) {
 		t.Fatalf("opening a project created configuration: %v", err)
 	}
-	firstChat := &conversation{thread: thread{ID: "first", Cwd: first}, context: peb.ActionContext{ProjectPath: first}}
-	secondChat := &conversation{thread: thread{ID: "second", Cwd: second}, context: peb.ActionContext{ProjectPath: second}}
+	firstChat := &conversation{thread: thread{ID: "first"}, context: peb.ActionContext{ProjectPath: first}}
+	secondChat := &conversation{thread: thread{ID: "second"}, context: peb.ActionContext{ProjectPath: second}}
 	a.conversations = map[string]*conversation{firstChat.ID: firstChat, secondChat.ID: secondChat}
-	for _, event := range []peb.UIEvent{
-		{ID: firstChat.ID, Event: peb.EditorEvent{Kind: "visibilitychange", Value: "visible"}},
-		{ID: secondChat.ID, Event: peb.EditorEvent{Kind: "click", Ref: "compose"}},
-		{ID: firstChat.ID, Event: peb.EditorEvent{Kind: "click", Ref: "compose"}},
-	} {
-		if err := a.handleCommand(command{event: event}); err != nil {
+	a.client = &rpcClient{ctx: context.Background()}
+	for _, want := range []*conversation{firstChat, secondChat, firstChat} {
+		want.loaded = true
+		if err := a.resume(want.ID); err != nil {
 			t.Fatal(err)
 		}
-		want := a.conversations[event.ID]
 		model, permission := "first-model", 2
 		if want == secondChat {
 			model, permission = "second-model", 1
 		}
-		if a.selected != want || a.context.ProjectPath != want.Cwd || a.model != model || a.effort != "medium" || a.permissionIndex != permission {
-			t.Fatalf("conversation %q restored model=%q permission=%d", event.ID, a.model, a.permissionIndex)
+		if a.selected != want || a.context.ProjectPath != want.context.ProjectPath || a.model != model || a.effort != "medium" || a.permissionIndex != permission {
+			t.Fatalf("conversation %q restored model=%q permission=%d", want.ID, a.model, a.permissionIndex)
 		}
 	}
 }
@@ -110,7 +108,7 @@ func TestInvalidProjectSettingsResetPreviousProject(t *testing.T) {
 			if err := a.handleCommand(command{action: true, context: peb.ActionContext{ProjectPath: root}}); err == nil {
 				t.Fatal("invalid configuration was accepted")
 			}
-			if !a.panelOpen || a.model != "" || a.effort != "" || a.permissionIndex != 0 {
+			if !a.workspaceOpen || a.model != "" || a.effort != "" || a.permissionIndex != 0 {
 				t.Fatal("failed load retained previous project's settings or hid the panel")
 			}
 		})

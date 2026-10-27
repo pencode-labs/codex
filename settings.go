@@ -25,10 +25,9 @@ func (a *agent) setContext(ctx peb.ActionContext) error {
 		return err
 	}
 	a.context = ctx
-	a.history, a.showHistory, a.composerMenu = threadPage{}, false, false
+	a.history, a.showHistory = threadPage{}, false
 	a.status, a.model, a.effort, a.permissionIndex = "", "", "", 0
-	a.selected = nil
-	a.panelDirty = true
+	a.selectConversation(nil)
 	if !filepath.IsAbs(ctx.ProjectPath) {
 		return nil
 	}
@@ -66,7 +65,7 @@ func (a *agent) saveProjectSettings(model, effort string, permissionIndex int) e
 		return fmt.Errorf("保存 Codex 项目配置失败：%w", err)
 	}
 	a.model, a.effort, a.permissionIndex = model, effort, permissionIndex
-	a.panelDirty = true
+	a.workspaceDirty = true
 	return nil
 }
 

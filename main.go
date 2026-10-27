@@ -24,7 +24,7 @@ func main() {
 
 func serveAgent(input io.Reader, output io.Writer) error {
 	app := &agent{commands: make(chan command, 64)}
-	err := peb.ServeExtension(input, output, peb.Contributions{Actions: []peb.Action{{ID: "chat", Text: "Codex", Tooltip: "Codex Agent", Location: peb.StatusBar}}}, peb.Handlers{
+	err := peb.ServeExtension(input, output, peb.Contributions{Actions: []peb.Action{{ID: "chat", Tooltip: "Codex Agent", Icon: "resources/icons/chatgpt.svg", Location: peb.StatusBar}}}, peb.Handlers{
 		ActivateActions: func(ctx context.Context, p *peb.ActionPublisher) {
 			app.ctx, app.publisher = ctx, p
 			app.done = make(chan struct{})

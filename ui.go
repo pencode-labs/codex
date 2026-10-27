@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -23,39 +24,80 @@ var chatParser = parser.New(parser.WithExtensions(extension.TableParser, extensi
 var chatRenderer = markdownhtml.New(markdownhtml.WithExtensions(extension.TableHTMLRenderer))
 
 func (a *agent) flush() {
-	for _, c := range a.conversations {
-		if !c.open || !c.dirty {
-			continue
-		}
-		view := c.view()
-		if err := a.publisher.Show(peb.UI{ID: c.ID, Title: c.title(), Kind: peb.EditorTab, Context: c.context, View: view}); err != nil {
-			fmt.Fprintln(stderrWriter, err)
-		}
-		c.dirty = false
+	if !a.dirty() {
+		return
 	}
-	if a.panelDirty && a.panelOpen {
-		if err := a.publisher.Show(peb.UI{ID: "composer", Title: "Codex", Kind: peb.Panel, Context: a.context, View: a.composerView()}); err != nil {
+	title := "Codex 新会话"
+	if a.selected != nil {
+		title = a.selected.title()
+	}
+	var view *peb.EditorView
+	if a.composerPrefix == "" || a.workspaceDirty || a.selected != nil && a.selected.dirty {
+		view = a.composerView()
+	} else {
+		view = a.historyView()
+	}
+	if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, View: view}); err != nil {
+		fmt.Fprintln(stderrWriter, err)
+		return
+	}
+	if a.revealWorkspace {
+		if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context}); err != nil {
 			fmt.Fprintln(stderrWriter, err)
+			return
 		}
-		a.panelDirty = false
+		a.revealWorkspace = false
+	}
+	a.workspaceDirty, a.historyDirty = false, false
+	if a.selected != nil {
+		a.selected.dirty = false
 	}
 }
 
 func (a *agent) composerView() *peb.EditorView {
 	var b strings.Builder
+	bindings := make([]peb.EditorBinding, 0, 16)
+	b.WriteString(`<main class="codex-workspace" data-pencode-layout="fill"><section class="codex-chat-pane"><div class="codex-transcript" data-ref="transcript" data-pencode-scroll="end" data-pencode-scroll-key="`)
+	if a.selected != nil {
+		b.WriteString(html.EscapeString(a.selected.ID))
+	}
+	b.WriteString(`">`)
+	if a.selected != nil {
+		bindings = a.selected.render(&b, bindings)
+	} else {
+		b.WriteString(`<article class="codex-chat"><div class="codex-empty"><h2>与 Codex 一起工作</h2><p>回复、命令执行和文件修改会显示在这里。</p></div></article>`)
+	}
+	b.WriteString(`</div>`)
 	p := a.permission()
 	draft, title := a.drafts[a.context.ProjectPath], "新会话"
 	busy := false
 	if a.selected != nil {
 		draft, title, busy = a.selected.draft, a.selected.title(), a.selected.busy
 	}
-	b.WriteString(`<section class="codex-composer"><form data-ref="form" class="codex-input-card" aria-label="`)
+	b.WriteString(`<section class="codex-composer"><form data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
 	b.WriteString(html.EscapeString(title))
-	b.WriteString(`"><textarea data-ref="prompt" class="codex-prompt" aria-label="给 Codex 的任务" placeholder="和 Codex 一起工作" rows="2">`)
+	b.WriteString(`">`)
+	files := a.attachments[a.attachmentScope()]
+	if len(files) > 0 {
+		b.WriteString(`<div class="codex-attachments" aria-label="附加文件">`)
+		for index, path := range files {
+			ref := "remove-file/" + strconv.Itoa(index)
+			b.WriteString(`<button class="codex-attachment" type="button" data-ref="`)
+			b.WriteString(ref)
+			b.WriteString(`" title="`)
+			b.WriteString(html.EscapeString(path))
+			b.WriteString(`" aria-label="移除文件 `)
+			b.WriteString(html.EscapeString(path))
+			b.WriteString(`"><span>`)
+			b.WriteString(html.EscapeString(filepath.Base(path)))
+			b.WriteString(`</span><span aria-hidden="true">×</span></button>`)
+			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`<textarea data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form" class="codex-prompt" aria-label="给 Codex 的任务" placeholder="和 Codex 一起工作" rows="2">`)
 	b.WriteString(html.EscapeString(draft))
-	b.WriteString(`</textarea><div class="codex-input-footer"><button data-ref="composer-menu" class="codex-add" type="button" title="新建与历史会话" aria-label="新建与历史会话" aria-expanded="`)
-	b.WriteString(strconv.FormatBool(a.composerMenu))
-	b.WriteString(`"><img src="resources/icons/plus.svg" alt=""></button><button data-ref="permission-settings" class="codex-access`)
+	b.WriteString(`</textarea><div class="codex-input-footer"><button data-ref="add-file" class="codex-icon-button" type="button" title="添加文件" aria-label="添加文件" aria-haspopup="dialog"><img src="resources/icons/plus.svg" alt=""></button><button data-ref="permission-settings" class="codex-access`)
 	if p.sandbox == "danger-full-access" {
 		b.WriteString(` codex-access-full`)
 	}
@@ -83,16 +125,12 @@ func (a *agent) composerView() *peb.EditorView {
 	}
 	b.WriteString(`<img src="resources/icons/chevron-down.svg" alt=""></button>`)
 	if busy {
-		b.WriteString(`<button data-ref="stop" class="codex-send" type="button" title="停止任务" aria-label="停止任务"><img src="resources/icons/square.svg" alt=""></button>`)
+		b.WriteString(`<button data-ref="stop" class="codex-icon-button codex-send" type="button" title="停止任务" aria-label="停止任务"><img src="resources/icons/square.svg" alt=""></button>`)
 	} else {
-		b.WriteString(`<button data-ref="send" class="codex-send" type="button" title="发送" aria-label="发送"><img src="resources/icons/arrow-up.svg" alt=""></button>`)
+		b.WriteString(`<button data-ref="send" class="codex-icon-button codex-send" type="button" title="发送" aria-label="发送"><img src="resources/icons/arrow-up.svg" alt=""></button>`)
 	}
 	b.WriteString(`</div></form>`)
-	bindings := []peb.EditorBinding{{Ref: "prompt", Kind: "input"}, {Ref: "form", Kind: "submit"}, {Ref: "composer-menu", Kind: "click"}, {Ref: "permission-settings", Kind: "click"}, {Ref: "model-settings", Kind: "click"}}
-	if a.composerMenu {
-		b.WriteString(`<div class="codex-composer-options" role="group" aria-label="会话操作"><button data-ref="new" type="button">新会话</button><button data-ref="history" type="button">历史会话</button></div>`)
-		bindings = append(bindings, peb.EditorBinding{Ref: "new", Kind: "click"}, peb.EditorBinding{Ref: "history", Kind: "click"})
-	}
+	bindings = append(bindings, peb.EditorBinding{Ref: "prompt", Kind: "input"}, peb.EditorBinding{Ref: "form", Kind: "submit"}, peb.EditorBinding{Ref: "add-file", Kind: "click"}, peb.EditorBinding{Ref: "permission-settings", Kind: "click"}, peb.EditorBinding{Ref: "model-settings", Kind: "click"})
 	status := a.status
 	if a.selected != nil && a.selected.status != "" {
 		status = a.selected.status
@@ -107,8 +145,21 @@ func (a *agent) composerView() *peb.EditorView {
 	} else {
 		bindings = append(bindings, peb.EditorBinding{Ref: "send", Kind: "click"})
 	}
+	b.WriteString(`</section></section><aside class="codex-sidebar" aria-label="历史会话"><section class="codex-history"><div class="codex-history-header"><h3>当前项目的会话</h3><button data-ref="new" class="codex-icon-button" type="button" title="新会话" aria-label="新会话"><img data-ref="new-icon" data-pencode-icon="edit" alt=""></button><button data-ref="refresh-history" class="codex-icon-button" type="button" title="刷新会话" aria-label="刷新会话"><img data-ref="refresh-history-icon" data-pencode-icon="refresh-cw" alt=""></button></div><div class="codex-history-list" data-ref="history-list" data-pencode-region data-pencode-scroll="preserve" data-pencode-scroll-key="`)
+	b.WriteString(html.EscapeString(a.context.ProjectPath))
+	b.WriteString(`">`)
+	bindings = append(bindings, peb.EditorBinding{Ref: "new", Kind: "click"}, peb.EditorBinding{Ref: "refresh-history", Kind: "click"})
+	a.composerPrefix = b.String()
+	a.composerBindings = bindings
+	return a.historyView()
+}
+
+func (a *agent) historyView() *peb.EditorView {
+	var b strings.Builder
+	b.WriteString(a.composerPrefix)
+	bindings := make([]peb.EditorBinding, len(a.composerBindings), len(a.composerBindings)+len(a.history.Data)+1)
+	copy(bindings, a.composerBindings)
 	if a.showHistory {
-		b.WriteString(`<div class="codex-history"><h3>当前项目的会话</h3>`)
 		if len(a.history.Data) == 0 {
 			b.WriteString(`<p class="codex-muted">暂无历史会话。发送第一条消息开始工作。</p>`)
 		}
@@ -116,6 +167,8 @@ func (a *agent) composerView() *peb.EditorView {
 			ref := "history/" + t.ID
 			b.WriteString(`<button class="codex-history-row" type="button" data-ref="`)
 			b.WriteString(html.EscapeString(ref))
+			b.WriteString(`" aria-current="`)
+			b.WriteString(strconv.FormatBool(a.selected != nil && a.selected.ID == t.ID))
 			b.WriteString(`">`)
 			title := t.Name
 			if title == "" {
@@ -129,31 +182,15 @@ func (a *agent) composerView() *peb.EditorView {
 			b.WriteString(`<button data-ref="more-history" type="button">更多会话</button>`)
 			bindings = append(bindings, peb.EditorBinding{Ref: "more-history", Kind: "click"})
 		}
-		b.WriteString(`</div>`)
+	} else {
+		b.WriteString(`<p class="codex-muted">点击刷新，查看当前项目的历史会话。</p>`)
 	}
-	b.WriteString(`</section>`)
+	b.WriteString(`</div></section></aside></main>`)
 	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
 }
 
-func (c *conversation) view() *peb.EditorView {
-	var b strings.Builder
-	b.WriteString(`<article class="codex-chat"><div class="codex-toolbar"><strong>Codex</strong><span class="codex-muted">`)
-	if c.busy {
-		b.WriteString("正在工作…")
-	} else {
-		b.WriteString("会话记录")
-	}
-	b.WriteString(`</span><button data-ref="compose" type="button">继续对话</button>`)
-	if c.busy {
-		b.WriteString(`<button data-ref="stop" type="button">停止</button>`)
-	}
-	b.WriteString(`</div><p class="codex-muted">`)
-	b.WriteString(html.EscapeString(c.Cwd))
-	b.WriteString(`</p>`)
-	bindings := []peb.EditorBinding{{Ref: "compose", Kind: "click"}}
-	if c.busy {
-		bindings = append(bindings, peb.EditorBinding{Ref: "stop", Kind: "click"})
-	}
+func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
+	b.WriteString(`<article class="codex-chat">`)
 	if c.cursor != "" {
 		b.WriteString(`<button data-ref="older" type="button">加载更早的记录</button>`)
 		bindings = append(bindings, peb.EditorBinding{Ref: "older", Kind: "click"})
@@ -172,6 +209,7 @@ func (c *conversation) view() *peb.EditorView {
 			i.html = fragment.String()
 			if len(i.html) > 512<<10 {
 				i.html = `<p class="codex-muted">此条输出过长，请在 Codex 历史中查看完整内容。</p>`
+				i.detailRef = ""
 			}
 		}
 		if size+len(i.html) > 1200<<10 {
@@ -183,28 +221,37 @@ func (c *conversation) view() *peb.EditorView {
 	if start > 0 {
 		b.WriteString(`<p class="codex-muted">较早输出已折叠，完整记录保存在 Codex 会话中。</p>`)
 	}
-	for _, i := range c.items[start:] {
+	for index := start; index < len(c.items); {
+		i := c.items[index]
+		if i.activityKinds() != 0 {
+			end := index + 1
+			for end < len(c.items) && c.items[end].activityKinds() != 0 {
+				end++
+			}
+			bindings = renderActivityGroup(b, bindings, c.items[index:end])
+			index = end
+			continue
+		}
 		b.WriteString(i.html)
+		if i.detailRef != "" {
+			bindings = append(bindings, peb.EditorBinding{Ref: i.detailRef, Kind: "click"})
+		}
+		index++
 	}
 	for _, r := range c.requests {
-		bindings = r.render(&b, bindings)
-	}
-	if c.status != "" {
-		b.WriteString(`<p class="codex-status" role="status">`)
-		b.WriteString(html.EscapeString(c.status))
-		b.WriteString(`</p>`)
+		bindings = r.render(b, bindings)
 	}
 	b.WriteString(`</article>`)
-	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
+	return bindings
 }
 
 func (i *chatItem) render(b *strings.Builder) {
-	label := ""
+	label, icon := "", "wrench"
 	class := "codex-message"
 	switch i.data.Type {
 	case "userMessage":
 		label = "你"
-		class += " codex-user"
+		class = "codex-message codex-user"
 	case "agentMessage":
 		label = "Codex"
 	case "plan":
@@ -212,23 +259,65 @@ func (i *chatItem) render(b *strings.Builder) {
 	case "reasoning":
 		label = "思考摘要"
 	case "commandExecution":
-		label = "命令 · " + i.data.Status
+		label, icon = "运行了命令", "terminal"
 	case "fileChange":
-		label = "文件修改 · " + i.data.Status
+		label, icon = "编辑了文件", "pencil"
 	case "mcpToolCall", "dynamicToolCall", "collabToolCall":
-		label = "工具 · " + i.data.Server + " " + i.data.Tool + " · " + i.data.Status
+		label = "调用了工具 " + strings.TrimSpace(i.data.Server+" "+i.data.Tool)
 	case "webSearch":
-		label = "搜索 · " + i.data.Query
+		label, icon = "搜索了 "+i.data.Query, "search"
 	case "contextCompaction":
 		label = "上下文已压缩"
 	default:
+		i.detailRef = ""
 		return
+	}
+	if kinds := i.activityKinds(); kinds != 0 {
+		icon = kinds.primary().icon
+	}
+	activity := i.data.Type != "userMessage" && i.data.Type != "agentMessage"
+	if activity {
+		class = "codex-message codex-activity"
+	} else {
+		i.detailRef = ""
 	}
 	b.WriteString(`<section class="`)
 	b.WriteString(class)
-	b.WriteString(`"><h3>`)
+	b.WriteString(`" aria-label="`)
 	b.WriteString(html.EscapeString(label))
-	b.WriteString(`</h3>`)
+	b.WriteString(`">`)
+	if activity {
+		hasDetails := i.text.Len() > 0 || i.output.Len() > 0 || i.data.Command != "" || len(i.data.Changes) > 0
+		if i.data.ID != "" && hasDetails {
+			if i.detailRef == "" {
+				i.detailRef = "item/" + i.data.ID
+			}
+			b.WriteString(`<button class="codex-activity-summary" type="button" data-ref="`)
+			b.WriteString(html.EscapeString(i.detailRef))
+			b.WriteString(`" aria-expanded="`)
+			b.WriteString(strconv.FormatBool(i.expanded))
+			b.WriteString(`">`)
+		} else {
+			i.detailRef = ""
+			b.WriteString(`<div class="codex-activity-summary">`)
+		}
+		b.WriteString(`<img src="resources/icons/`)
+		b.WriteString(icon)
+		b.WriteString(`.svg" alt=""><span>`)
+		i.renderActivityLabel(b, label)
+		b.WriteString(`</span>`)
+		renderActivityStatus(b, i.data.Status)
+		if i.detailRef != "" {
+			b.WriteString(`<img class="codex-activity-chevron" src="resources/icons/chevron-down.svg" alt=""></button>`)
+		} else {
+			b.WriteString(`</div>`)
+		}
+		if !hasDetails || i.detailRef != "" && !i.expanded {
+			b.WriteString(`</section>`)
+			return
+		}
+		b.WriteString(`<div class="codex-activity-details">`)
+	}
 	if i.text.Len() > 0 {
 		if i.complete && (i.data.Type == "agentMessage" || i.data.Type == "plan") {
 			renderMarkdown(b, i.text.String())
@@ -249,6 +338,9 @@ func (i *chatItem) render(b *strings.Builder) {
 		b.WriteString(html.EscapeString(change.Path))
 		b.WriteString(`</h4>`)
 		pre(b, change.Diff[:min(len(change.Diff), 64<<10)])
+	}
+	if activity {
+		b.WriteString(`</div>`)
 	}
 	b.WriteString(`</section>`)
 }

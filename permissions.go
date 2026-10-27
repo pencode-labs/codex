@@ -45,7 +45,7 @@ func (a *agent) openPermissions() error {
 	if err := a.closeModels(); err != nil {
 		return err
 	}
-	a.permissionSettings, a.composerMenu, a.panelDirty = true, false, true
+	a.permissionSettings, a.workspaceDirty = true, true
 	a.permissionHelp = false
 	return a.showPermissions()
 }
@@ -54,7 +54,7 @@ func (a *agent) closePermissions() error {
 	if !a.permissionSettings {
 		return nil
 	}
-	a.permissionSettings, a.permissionHelp, a.panelDirty = false, false, true
+	a.permissionSettings, a.permissionHelp, a.workspaceDirty = false, false, true
 	return a.publisher.CloseUI("permissions")
 }
 
@@ -62,12 +62,15 @@ func (a *agent) closeComposerMenus() error {
 	if err := a.closeModels(); err != nil {
 		return err
 	}
-	return a.closePermissions()
+	if err := a.closePermissions(); err != nil {
+		return err
+	}
+	return a.closeFiles()
 }
 
 func (a *agent) handlePermissionEvent(e peb.EditorEvent) error {
 	if e.Kind == "close" {
-		a.permissionSettings, a.permissionHelp, a.panelDirty = false, false, true
+		a.permissionSettings, a.permissionHelp, a.workspaceDirty = false, false, true
 		return nil
 	}
 	if e.Kind != "click" || !a.permissionSettings {

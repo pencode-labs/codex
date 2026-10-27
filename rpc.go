@@ -38,6 +38,8 @@ type rpcClient struct {
 	err      error // Published before messages closes.
 	next     uint64
 	handle   func(envelope)
+	commands <-chan command
+	dispatch func(command)
 }
 
 func startClient(parent context.Context, root string, handle func(envelope)) (*rpcClient, error) {
@@ -141,6 +143,8 @@ func call[T any](c *rpcClient, method string, params any) (T, error) {
 	defer timeout.Stop()
 	for {
 		select {
+		case cmd := <-c.commands:
+			c.dispatch(cmd)
 		case <-c.ctx.Done():
 			return result, c.ctx.Err()
 		case <-timeout.C:

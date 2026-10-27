@@ -124,7 +124,7 @@ func (a *agent) openModels() error {
 	if err := a.closePermissions(); err != nil {
 		return err
 	}
-	a.modelSettings, a.composerMenu, a.panelDirty = true, false, true
+	a.modelSettings, a.workspaceDirty = true, true
 	a.modelError = ""
 	a.pendingModel = ""
 	if !a.modelsLoaded {
@@ -135,6 +135,9 @@ func (a *agent) openModels() error {
 	if err := a.loadModels(); err != nil {
 		a.modelError = err.Error()
 	}
+	if !a.modelSettings {
+		return nil
+	}
 	return a.showModels()
 }
 
@@ -142,13 +145,13 @@ func (a *agent) closeModels() error {
 	if !a.modelSettings {
 		return nil
 	}
-	a.modelSettings, a.pendingModel, a.panelDirty = false, "", true
+	a.modelSettings, a.pendingModel, a.workspaceDirty = false, "", true
 	return a.publisher.CloseUI("models")
 }
 
 func (a *agent) handleModelEvent(e peb.EditorEvent) error {
 	if e.Kind == "close" {
-		a.modelSettings, a.pendingModel, a.panelDirty = false, "", true
+		a.modelSettings, a.pendingModel, a.workspaceDirty = false, "", true
 		return nil
 	}
 	if e.Kind != "click" || !a.modelSettings {
