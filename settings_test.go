@@ -5,11 +5,150 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/pencode-labs/pencode/peb"
 )
+
+func TestResolveExecutablePath(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	homeVariable := "HOME"
+	if runtime.GOOS == "windows" {
+		homeVariable = "USERPROFILE"
+	}
+	t.Setenv(homeVariable, home)
+	t.Setenv("PENCODE_CODEX_PATH", "")
+	absolute := filepath.Join(root, "Program Files", "Codex", "codex")
+	for _, tc := range []struct{ name, path, want string }{
+		{"default", "", "codex"},
+		{"blank", "  ", "codex"},
+		{"command", "codex-dev", "codex-dev"},
+		{"absolute with spaces", absolute, absolute},
+		{"forward slashes", filepath.ToSlash(absolute), absolute},
+		{"relative", "./tools with spaces/codex", filepath.Join(root, "tools with spaces", "codex")},
+		{"native relative", filepath.Join("tools", "codex"), filepath.Join(root, "tools", "codex")},
+		{"home", "~/.local/bin/codex", filepath.Join(home, ".local", "bin", "codex")},
+		{"native home", "~" + string(filepath.Separator) + "bin" + string(filepath.Separator) + "codex", filepath.Join(home, "bin", "codex")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveExecutablePath(root, tc.path)
+			if err != nil || got != tc.want {
+				t.Fatalf("resolve %q = %q, %v; want %q", tc.path, got, err, tc.want)
+			}
+		})
+	}
+	if runtime.GOOS == "windows" {
+		for _, path := range []string{`C:\Tools\codex.exe`, `\\server\share\Codex CLI\codex.exe`} {
+			if got, err := resolveExecutablePath(root, path); err != nil || got != path {
+				t.Fatalf("Windows path changed: %q, %v", got, err)
+			}
+		}
+	}
+	t.Setenv("PENCODE_CODEX_PATH", "~/.local/bin/codex")
+	if got, err := resolveExecutablePath(root, ""); err != nil || got != filepath.Join(home, ".local", "bin", "codex") {
+		t.Fatalf("environment path was not expanded: %q, %v", got, err)
+	}
+	if got, err := resolveExecutablePath(root, absolute); err != nil || got != absolute {
+		t.Fatalf("setting did not override environment: %q, %v", got, err)
+	}
+}
+
+func TestResolveExecutableDirectory(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "Codex CLI")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "codex"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	executable := filepath.Join(directory, name)
+	if err := os.WriteFile(executable, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PENCODE_CODEX_PATH", directory)
+	for _, path := range []string{directory, filepath.ToSlash(directory), "./Codex CLI", ""} {
+		if got, err := resolveExecutablePath(root, path); err != nil || got != executable {
+			t.Fatalf("resolve directory %q = %q, %v; want %q", path, got, err, executable)
+		}
+	}
+	if err := os.Remove(executable); err != nil {
+		t.Fatal(err)
+	}
+	for _, childIsDirectory := range []bool{false, true} {
+		if childIsDirectory {
+			if err := os.Mkdir(executable, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := resolveExecutablePath(root, directory); err == nil || !strings.Contains(err.Error(), strconv.Quote(directory)) || !strings.Contains(err.Error(), name) {
+			t.Fatalf("missing executable diagnostic (directory=%t): %v", childIsDirectory, err)
+		}
+	}
+}
+
+func TestExecutablePathStartsClientAndUpdatesWithoutInterrupting(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	relative := filepath.Join("tools with spaces", "codex"+filepath.Ext(executable))
+	path := filepath.Join(root, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	t.Setenv("PENCODE_CODEX_PATH", filepath.Join(root, "missing-codex"))
+	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: root}}
+	update := func(path string) {
+		t.Helper()
+		value, _ := json.Marshal(path)
+		if err := a.handleCommand(command{settings: peb.SettingValues{"executablePath": value}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(filepath.ToSlash(relative))
+	if err := a.connect(); err != nil {
+		t.Fatal(err)
+	}
+	client := a.client
+	defer client.close()
+	update(filepath.Join(root, "new-codex"))
+	if err := a.connect(); err != nil || a.client != client || client.ctx.Err() != nil {
+		t.Fatal("path update interrupted the existing connection", err)
+	}
+	if _, err := call[threadPage](client, "thread/list", map[string]any{"cwd": root, "sourceKinds": []string{"cli", "vscode", "appServer"}}); err != nil {
+		t.Fatal("existing connection stopped responding", err)
+	}
+	client.close()
+	a.client = nil
+	update("./" + filepath.ToSlash(filepath.Dir(relative)))
+	if err := a.connect(); err != nil {
+		t.Fatal("directory setting did not start app-server", err)
+	}
+	a.client.close()
+	a.client = nil
+	update(filepath.Join(root, "new-codex"))
+	if err := a.connect(); err == nil || !strings.Contains(err.Error(), "new-codex") {
+		t.Fatalf("next connection did not use the new path: %v", err)
+	}
+	update("")
+	if err := a.connect(); err == nil || !strings.Contains(err.Error(), "missing-codex") {
+		t.Fatalf("clearing the setting did not restore environment fallback: %v", err)
+	}
+}
 
 func TestProjectSettingsSurviveRestart(t *testing.T) {
 	root := t.TempDir()

@@ -118,6 +118,7 @@ type agent struct {
 	pendingHead, pendingCount                  int
 	done                                       chan struct{}
 	client                                     *rpcClient
+	executablePath                             string
 	context                                    peb.ActionContext
 	conversations                              map[string]*conversation
 	selected                                   *conversation
@@ -281,7 +282,7 @@ func (a *agent) connect() error {
 	if !filepath.IsAbs(root) {
 		return fmt.Errorf("请先打开项目目录，再使用 Codex")
 	}
-	client, err := startClient(a.ctx, root, a.onMessage)
+	client, err := startClient(a.ctx, root, a.executablePath, a.onMessage)
 	if err != nil {
 		return err
 	}
@@ -313,6 +314,13 @@ func (a *agent) openWorkspace(ctx peb.ActionContext) error {
 }
 
 func (a *agent) handleCommand(cmd command) error {
+	if cmd.settings != nil {
+		path, err := peb.DecodeSetting[string](cmd.settings, "executablePath")
+		if err == nil {
+			a.executablePath = path
+		}
+		return err
+	}
 	if cmd.action {
 		if err := a.openWorkspace(cmd.context); err != nil {
 			return err

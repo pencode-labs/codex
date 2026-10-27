@@ -145,7 +145,7 @@ func (a *agent) composerView() *peb.EditorView {
 	} else {
 		bindings = append(bindings, peb.EditorBinding{Ref: "send", Kind: "click"})
 	}
-	b.WriteString(`</section></section><aside class="codex-sidebar" aria-label="历史会话"><section class="codex-history"><div class="codex-history-header"><h3>当前项目的会话</h3><button data-ref="new" class="codex-icon-button" type="button" title="新会话" aria-label="新会话"><img data-ref="new-icon" data-pencode-icon="edit" alt=""></button><button data-ref="refresh-history" class="codex-icon-button" type="button" title="刷新会话" aria-label="刷新会话"><img data-ref="refresh-history-icon" data-pencode-icon="refresh-cw" alt=""></button></div><div class="codex-history-list" data-ref="history-list" data-pencode-region data-pencode-scroll="preserve" data-pencode-scroll-key="`)
+	b.WriteString(`</section></section><aside class="codex-sidebar" aria-label="历史会话"><section class="codex-history"><div class="codex-history-header"><h3>当前项目的会话</h3><button data-ref="new" class="codex-icon-button" type="button" title="新会话" aria-label="新会话"><img data-ref="new-icon" data-pencode-icon="add" alt=""></button><button data-ref="refresh-history" class="codex-icon-button" type="button" title="刷新会话" aria-label="刷新会话"><img data-ref="refresh-history-icon" data-pencode-icon="refresh-cw" alt=""></button></div><div class="codex-history-list" data-ref="history-list" data-pencode-region data-pencode-scroll="preserve" data-pencode-scroll-key="`)
 	b.WriteString(html.EscapeString(a.context.ProjectPath))
 	b.WriteString(`">`)
 	bindings = append(bindings, peb.EditorBinding{Ref: "new", Kind: "click"}, peb.EditorBinding{Ref: "refresh-history", Kind: "click"})

@@ -223,7 +223,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PENCODE_CODEX_PATH", path)
+	t.Setenv("PENCODE_CODEX_PATH", filepath.Join(t.TempDir(), "missing-codex"))
 	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
 	gate := filepath.Join(t.TempDir(), "start-codex")
 	t.Setenv("PENCODE_CODEX_STARTUP_GATE", gate)
@@ -266,9 +266,15 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		if err != nil || f.Kind != peb.Register || len(c.Actions) != 1 || c.Actions[0].Location != peb.StatusBar {
 			t.Fatal("invalid registration", f, err)
 		}
+		if len(c.Settings) != 1 || c.Settings[0].ID != "executablePath" || c.Settings[0].Type != peb.SettingString || string(c.Settings[0].Default) != `""` {
+			t.Fatal("missing executable path setting", c.Settings)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("registration timed out")
 	}
+	pathValue, _ := json.Marshal(path)
+	settings, _ := peb.EncodeSettingValues(nil, peb.SettingValues{"executablePath": pathValue})
+	write(peb.SettingsRequest, 2, settings)
 	write(peb.ActionActivate, 0, nil)
 	ctx := peb.ActionContext{ID: "chat", ProjectPath: t.TempDir()}
 	id := uint32(1)

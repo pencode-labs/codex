@@ -42,12 +42,12 @@ type rpcClient struct {
 	dispatch func(command)
 }
 
-func startClient(parent context.Context, root string, handle func(envelope)) (*rpcClient, error) {
-	ctx, cancel := context.WithCancel(parent)
-	path := os.Getenv("PENCODE_CODEX_PATH")
-	if path == "" {
-		path = "codex"
+func startClient(parent context.Context, root, path string, handle func(envelope)) (*rpcClient, error) {
+	path, err := resolveExecutablePath(root, path)
+	if err != nil {
+		return nil, err
 	}
+	ctx, cancel := context.WithCancel(parent)
 	cmd := exec.CommandContext(ctx, path, "app-server")
 	cmd.Dir, cmd.Stderr = root, os.Stderr
 	hideWindow(cmd)
@@ -66,7 +66,7 @@ func startClient(parent context.Context, root string, handle func(envelope)) (*r
 		cancel()
 		_ = stdin.Close()
 		_ = stdout.Close()
-		return nil, fmt.Errorf("启动 Codex app-server: %w（请安装 Codex CLI 并运行 codex login）", err)
+		return nil, fmt.Errorf("启动 Codex app-server: %w（请检查 Codex 可执行文件路径；留空时需在 PATH 中提供 codex）", err)
 	}
 	c := &rpcClient{ctx: ctx, cancel: cancel, cmd: cmd, stdin: stdin, writer: json.NewEncoder(stdin), messages: make(chan envelope, 128), done: make(chan struct{}), handle: handle}
 	go func() {

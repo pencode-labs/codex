@@ -7,21 +7,21 @@
 .codex-chat, .codex-composer { color: var(--vscode-editor-foreground); font-size: 13px; line-height: 1.6; }
 .codex-chat { display: flex; flex-direction: column; box-sizing: border-box; width: 100%; max-width: 860px; margin: 0 auto; padding: 24px 40px 48px; font-family: ui; font-size: 14px; line-height: 1.7; }
 .codex-muted { color: var(--vscode-descriptionForeground); font-size: 12px; overflow-wrap: anywhere; }
-.codex-chat button, .codex-composer button { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 0; border-radius: 4px; padding: 5px 12px; }
+.codex-chat button, .codex-composer button { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 0; border-radius: 8px; padding: 5px 12px; }
 .codex-chat button:hover, .codex-composer button:hover { background: var(--vscode-button-secondaryHoverBackground); }
 .codex-chat button:focus-visible, .codex-composer button:focus-visible, .codex-composer textarea:focus, .codex-chat input:focus, .codex-composer input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-.codex-chat input, .codex-composer input { color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 8px; }
+.codex-chat input, .codex-composer input { color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 8px; padding: 8px; }
 .codex-composer input { width: 180px; padding: 4px 8px; }
 .codex-composer { min-width: 0; }
 .codex-input-card { width: 100%; min-width: 0; margin: 0; padding: 12px 8px 8px 12px; border: 1px solid var(--vscode-input-border); border-radius: 22px; background: var(--vscode-input-background); }
 .codex-input-card:focus-within { border-color: var(--vscode-focusBorder); }
-.codex-composer .codex-prompt { display: block; width: 100%; height: 38px; min-height: 38px; max-height: 240px; overflow-y: auto; margin: 0; padding: 0; border: 0; border-radius: 0; outline: none; resize: none; color: var(--vscode-input-foreground); placeholder-color: var(--vscode-input-placeholderForeground); background: transparent; font-family: ui; font-size: 14px; line-height: 1.5; }
+.codex-composer .codex-prompt { display: block; width: 100%; height: 38px; min-height: 38px; max-height: 240px; overflow-y: auto; margin: 0; padding: 0; border: 0; border-radius: 8px; outline: none; resize: none; color: var(--vscode-input-foreground); placeholder-color: var(--vscode-input-placeholderForeground); background: transparent; font-family: ui; font-size: 14px; line-height: 1.5; }
 .codex-composer .codex-prompt:focus { outline: none; }
 .codex-prompt::placeholder { color: var(--vscode-input-placeholderForeground); }
 .codex-input-footer { display: flex; align-items: center; gap: 12px; min-width: 0; height: 28px; margin-top: 8px; }
 .codex-input-footer img { display: block; flex-shrink: 0; }
 .codex-input-spacer { flex: 1; min-width: 0; }
-.codex-workspace .codex-icon-button { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 4px; color: var(--vscode-foreground); background: transparent; }
+.codex-workspace .codex-icon-button { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 8px; color: var(--vscode-foreground); background: transparent; }
 .codex-icon-button img { display: block; flex-shrink: 0; width: 14px; height: 14px; }
 .codex-history-header .codex-icon-button img { width: 16px; height: 16px; }
 .codex-workspace .codex-icon-button:hover { background: var(--vscode-toolbar-hoverBackground); }
@@ -43,8 +43,8 @@
 .codex-attachment > span:last-child { flex-shrink: 0; color: var(--vscode-descriptionForeground); }
 .codex-files { color: var(--vscode-editor-foreground); font-family: ui; font-size: 13px; }
 .codex-file-path { display: flex; gap: 8px; margin-bottom: 12px; }
-.codex-file-path input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--vscode-input-border); border-radius: 4px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); }
-.codex-files button { padding: 5px 10px; border: 0; border-radius: 4px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); font-family: ui; font-size: 13px; }
+.codex-file-path input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--vscode-input-border); border-radius: 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); }
+.codex-files button { padding: 5px 10px; border: 0; border-radius: 8px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); font-family: ui; font-size: 13px; }
 .codex-files button:hover { background: var(--vscode-button-secondaryHoverBackground); }
 .codex-files button:focus-visible, .codex-files input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .codex-file-list { max-height: 320px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
@@ -53,7 +53,7 @@
 .codex-files p { margin: 8px 0; }
 .codex-model-menu { padding: 2px 4px 4px; color: var(--vscode-editorWidget-foreground); font-size: 13px; line-height: 1.4; }
 .codex-model-menu h3, .codex-model-group { margin: 0; padding: 2px 4px 4px; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 500; }
-.codex-model-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 28px; min-height: 28px; margin: 0; padding: 0 4px; border: 0; border-radius: 5px; color: inherit; background: transparent; font-size: 13px; text-align: left; }
+.codex-model-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 28px; min-height: 28px; margin: 0; padding: 0 4px; border: 0; border-radius: 8px; color: inherit; background: transparent; font-size: 13px; text-align: left; }
 .codex-model-menu button:hover, .codex-model-menu button:focus-visible { background: var(--vscode-list-hoverBackground); }
 .codex-model-menu button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .codex-model-menu button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -64,7 +64,7 @@
 .codex-permission-header h3 { margin: 0; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 500; }
 .codex-permission-menu .codex-permission-help { flex-shrink: 0; min-height: 20px; padding: 0; border: 0; color: var(--vscode-descriptionForeground); background: transparent; font-size: 12px; text-decoration: underline; }
 .codex-permission-help:hover { color: var(--vscode-textLink-foreground); }
-.codex-permission-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin: 0; padding: 5px 4px; border: 0; border-radius: 5px; color: inherit; background: transparent; text-align: left; }
+.codex-permission-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin: 0; padding: 5px 4px; border: 0; border-radius: 8px; color: inherit; background: transparent; text-align: left; }
 .codex-permission-option:hover, .codex-permission-option:focus-visible { background: var(--vscode-list-hoverBackground); }
 .codex-permission-menu button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .codex-permission-icon, .codex-permission-check { flex-shrink: 0; width: 14px; height: 14px; }
@@ -84,7 +84,7 @@
 .codex-activity-group { flex: 0 0 auto; min-width: 0; margin: 4px 0; color: var(--vscode-descriptionForeground); }
 .codex-activity-list { max-height: 240px; margin-top: 2px; padding-left: 8px; overflow: auto; }
 .codex-activity-list > .codex-activity { margin: 0; }
-.codex-chat .codex-activity-summary { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 24px; margin: 0; padding: 2px 0; border: 0; border-radius: 4px; color: var(--vscode-descriptionForeground); background: transparent; font-family: ui; font-size: 13px; line-height: 1.6; text-align: left; }
+.codex-chat .codex-activity-summary { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 24px; margin: 0; padding: 2px 0; border: 0; border-radius: 8px; color: var(--vscode-descriptionForeground); background: transparent; font-family: ui; font-size: 13px; line-height: 1.6; text-align: left; }
 .codex-chat button.codex-activity-summary:hover { color: var(--vscode-editor-foreground); background: var(--vscode-toolbar-hoverBackground); }
 .codex-activity-summary img { flex-shrink: 0; width: 14px; height: 14px; }
 .codex-activity-summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -108,7 +108,7 @@
 .codex-history { display: flex; flex: 1; flex-direction: column; min-height: 80px; }
 .codex-history-header { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-bottom: 8px; }
 .codex-history-header h3 { flex: 1; margin: 0; }
-.codex-history-list > button { padding: 5px 10px; border: 0; border-radius: 4px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
+.codex-history-list > button { padding: 5px 10px; border: 0; border-radius: 8px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
 .codex-history button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .codex-history-list { flex: 1; min-height: 0; overflow: auto; }
 .codex-history-list > .codex-history-row { display: block; width: 100%; padding: 8px 12px; text-align: left; color: var(--vscode-sideBar-foreground); background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

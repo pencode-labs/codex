@@ -41,7 +41,9 @@ go build -o bin/codex-agent .
 
 Windows 单独构建时使用 `go build -o bin/codex-agent.exe .`。如需从扩展管理器选择本目录安装，将 `resources/extension.json` 的 `entry` 改为 `bin/codex-agent.exe`。本扩展依赖 `peb.EditorTab` 及编辑器内分栏和滚动支持，需要同时更新 Pencode 主程序。
 
-Codex 默认从 `PATH` 查找。可在工作区服务器启动前设置 `PENCODE_CODEX_PATH` 为原生 Codex 可执行文件的完整路径；不经过 shell，不接受命令字符串。远程工作区中的进程、认证和文件操作均在服务器运行。
+在 IDE **设置 → Codex Agent → Codex 可执行文件路径** 中指定原生 Codex 可执行文件或其所在目录；填写目录时使用其中的 `codex.exe`（Windows）或 `codex`（macOS/Linux），目录中没有该程序时提示具体错误。支持 Windows 路径（如 `C:\Program Files\Codex\codex.exe` 或 `C:/Tools/codex.exe`）、macOS/Linux 路径（如 `/usr/local/bin/codex`）、用户目录（如 `~/.local/bin/codex`，Windows 也支持 `~\bin\codex.exe`）以及相对于项目目录的路径（如 `./tools/codex`）。路径包含空格时无需添加引号；只填写命令名时从 `PATH` 查找。
+
+此设置优先于环境变量 `PENCODE_CODEX_PATH`；留空时先使用该环境变量，再从 `PATH` 查找 `codex`。修改在下次连接时生效，已有连接可通过重启扩展切换，不中断正在运行的任务。可执行文件不经过 shell，不接受命令字符串。远程工作区使用服务器的路径格式，进程、认证和文件操作均在服务器运行。
 
 项目设置保存在工作区服务器的项目根目录下，例如 `.pencode/codex.json`：
 

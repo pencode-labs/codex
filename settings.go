@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/pencode-labs/pencode/peb"
@@ -14,6 +16,42 @@ type projectSettings struct {
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	Permission      string `json:"permission"`
+}
+
+func resolveExecutablePath(root, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = strings.TrimSpace(os.Getenv("PENCODE_CODEX_PATH"))
+	}
+	if path == "" {
+		return "codex", nil
+	}
+	path = filepath.FromSlash(path)
+	if path == "~" || strings.HasPrefix(path, "~"+string(filepath.Separator)) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("解析 Codex 用户目录失败：%w", err)
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path[1:], string(filepath.Separator)))
+	}
+	if !filepath.IsAbs(path) {
+		if !strings.ContainsRune(path, filepath.Separator) {
+			return path, nil
+		}
+		path = filepath.Join(root, path)
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		name := "codex"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		executable, err := exec.LookPath(filepath.Join(path, name))
+		if err != nil {
+			return "", fmt.Errorf("Codex 路径 %q 是目录，但未找到可执行文件 %q：%w", path, name, err)
+		}
+		return executable, nil
+	}
+	return path, nil
 }
 
 func (a *agent) setContext(ctx peb.ActionContext) error {
