@@ -27,9 +27,10 @@ func (a *agent) flush() {
 	if !a.dirty() {
 		return
 	}
-	title := "Codex 新会话"
+	title, busy := "Codex 新会话", false
 	if a.selected != nil {
 		title = a.selected.title()
+		busy = a.selected.busy
 	}
 	var view *peb.EditorView
 	if a.composerPrefix == "" || a.workspaceDirty || a.selected != nil && a.selected.dirty {
@@ -37,12 +38,12 @@ func (a *agent) flush() {
 	} else {
 		view = a.historyView()
 	}
-	if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, View: view}); err != nil {
+	if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, View: view, Busy: busy}); err != nil {
 		fmt.Fprintln(stderrWriter, err)
 		return
 	}
 	if a.revealWorkspace {
-		if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context}); err != nil {
+		if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, Busy: busy}); err != nil {
 			fmt.Fprintln(stderrWriter, err)
 			return
 		}
@@ -145,9 +146,7 @@ func (a *agent) composerView() *peb.EditorView {
 	} else {
 		bindings = append(bindings, peb.EditorBinding{Ref: "send", Kind: "click"})
 	}
-	b.WriteString(`</section></section><aside class="codex-sidebar" aria-label="历史会话"><section class="codex-history"><div class="codex-history-header"><h3>当前项目的会话</h3><button data-ref="new" class="codex-icon-button" type="button" title="新会话" aria-label="新会话"><img data-ref="new-icon" data-pencode-icon="add" alt=""></button><button data-ref="refresh-history" class="codex-icon-button" type="button" title="刷新会话" aria-label="刷新会话"><img data-ref="refresh-history-icon" data-pencode-icon="refresh-cw" alt=""></button></div><div class="codex-history-list" data-ref="history-list" data-pencode-region data-pencode-scroll="preserve" data-pencode-scroll-key="`)
-	b.WriteString(html.EscapeString(a.context.ProjectPath))
-	b.WriteString(`">`)
+	b.WriteString(`</section></section><aside class="codex-sidebar" aria-label="历史会话"><section class="codex-history">`)
 	bindings = append(bindings, peb.EditorBinding{Ref: "new", Kind: "click"}, peb.EditorBinding{Ref: "refresh-history", Kind: "click"})
 	a.composerPrefix = b.String()
 	a.composerBindings = bindings
@@ -157,15 +156,24 @@ func (a *agent) composerView() *peb.EditorView {
 func (a *agent) historyView() *peb.EditorView {
 	var b strings.Builder
 	b.WriteString(a.composerPrefix)
-	bindings := make([]peb.EditorBinding, len(a.composerBindings), len(a.composerBindings)+len(a.history.Data)+1)
+	bindings := make([]peb.EditorBinding, len(a.composerBindings), len(a.composerBindings)+2*len(a.history.Data)+1)
 	copy(bindings, a.composerBindings)
+	b.WriteString(`<div class="codex-history-header" data-ref="history-header" data-pencode-region><h3>当前项目的会话</h3><button data-ref="new" class="codex-icon-button" type="button" title="新会话" aria-label="新会话"><img data-ref="new-icon" data-pencode-icon="add" alt=""></button><button data-ref="refresh-history" class="codex-icon-button" type="button"`)
+	if a.historyLoading {
+		b.WriteString(` disabled aria-busy="true" title="正在加载会话" aria-label="正在加载会话"><img class="codex-history-spinning"`)
+	} else {
+		b.WriteString(` title="刷新会话" aria-label="刷新会话"><img`)
+	}
+	b.WriteString(` data-ref="refresh-history-icon" data-pencode-icon="refresh-cw" alt=""></button></div><div class="codex-history-list" data-ref="history-list" data-pencode-region data-pencode-scroll="preserve" data-pencode-scroll-key="`)
+	b.WriteString(html.EscapeString(a.context.ProjectPath))
+	b.WriteString(`">`)
 	if a.showHistory {
 		if len(a.history.Data) == 0 {
 			b.WriteString(`<p class="codex-muted">暂无历史会话。发送第一条消息开始工作。</p>`)
 		}
 		for _, t := range a.history.Data {
 			ref := "history/" + t.ID
-			b.WriteString(`<button class="codex-history-row" type="button" data-ref="`)
+			b.WriteString(`<div class="codex-history-entry"><button class="codex-history-row" type="button" data-ref="`)
 			b.WriteString(html.EscapeString(ref))
 			b.WriteString(`" aria-current="`)
 			b.WriteString(strconv.FormatBool(a.selected != nil && a.selected.ID == t.ID))
@@ -176,12 +184,22 @@ func (a *agent) historyView() *peb.EditorView {
 			}
 			b.WriteString(html.EscapeString(title))
 			b.WriteString(`</button>`)
-			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
+			renameRef := "rename/" + t.ID
+			b.WriteString(`<div class="codex-history-actions"><button class="codex-icon-button" type="button" data-ref="`)
+			b.WriteString(html.EscapeString(renameRef))
+			b.WriteString(`" title="修改会话标题" aria-label="修改会话标题" aria-haspopup="dialog"><img src="resources/icons/pencil.svg" alt=""></button></div></div>`)
+			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"}, peb.EditorBinding{Ref: renameRef, Kind: "click"})
 		}
 		if a.history.NextCursor != "" {
-			b.WriteString(`<button data-ref="more-history" type="button">更多会话</button>`)
+			b.WriteString(`<button data-ref="more-history" type="button"`)
+			if a.historyLoading {
+				b.WriteString(` disabled`)
+			}
+			b.WriteString(`>更多会话</button>`)
 			bindings = append(bindings, peb.EditorBinding{Ref: "more-history", Kind: "click"})
 		}
+	} else if a.historyLoading {
+		b.WriteString(`<p class="codex-muted" role="status">正在加载历史会话…</p>`)
 	} else {
 		b.WriteString(`<p class="codex-muted">点击刷新，查看当前项目的历史会话。</p>`)
 	}
@@ -195,7 +213,7 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 		b.WriteString(`<button data-ref="older" type="button">加载更早的记录</button>`)
 		bindings = append(bindings, peb.EditorBinding{Ref: "older", Kind: "click"})
 	}
-	if len(c.items) == 0 {
+	if len(c.items) == 0 && c.progress == nil {
 		b.WriteString(`<div class="codex-empty"><h2>与 Codex 一起工作</h2><p>回复、命令执行和文件修改会显示在这里。</p></div>`)
 	}
 	// Render only changed items. Reserve room for approvals and keep the latest
@@ -221,22 +239,46 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 	if start > 0 {
 		b.WriteString(`<p class="codex-muted">较早输出已折叠，完整记录保存在 Codex 会话中。</p>`)
 	}
+	latestActivity := -1
+	if c.busy && len(c.requests) == 0 {
+		for index := len(c.items) - 1; index >= start; index-- {
+			if c.items[index].data.Type == "userMessage" {
+				break
+			}
+			if c.items[index].activityKinds() != 0 {
+				latestActivity = index
+				break
+			}
+		}
+	}
+	var progress *turnProgress
 	for index := start; index < len(c.items); {
 		i := c.items[index]
+		if i.data.Type != "userMessage" && i.progress != nil && i.progress != progress {
+			i.progress.render(b)
+			progress = i.progress
+		}
 		if i.activityKinds() != 0 {
 			end := index + 1
-			for end < len(c.items) && c.items[end].activityKinds() != 0 {
+			for end < len(c.items) && c.items[end].activityKinds() != 0 && c.items[end].progress == i.progress {
 				end++
 			}
-			bindings = renderActivityGroup(b, bindings, c.items[index:end])
+			bindings = renderActivityGroup(b, bindings, c.items[index:end], latestActivity >= index && latestActivity < end)
 			index = end
 			continue
 		}
 		b.WriteString(i.html)
+		if i.data.Type == "userMessage" && i.progress != nil && i.progress != progress {
+			i.progress.render(b)
+			progress = i.progress
+		}
 		if i.detailRef != "" {
 			bindings = append(bindings, peb.EditorBinding{Ref: i.detailRef, Kind: "click"})
 		}
 		index++
+	}
+	if c.progress != nil && c.progress != progress {
+		c.progress.render(b)
 	}
 	for _, r := range c.requests {
 		bindings = r.render(b, bindings)
@@ -285,6 +327,11 @@ func (i *chatItem) render(b *strings.Builder) {
 	b.WriteString(class)
 	b.WriteString(`" aria-label="`)
 	b.WriteString(html.EscapeString(label))
+	if i.data.ID != "" {
+		b.WriteString(`" data-ref="message/`)
+		b.WriteString(html.EscapeString(i.data.ID))
+		b.WriteString(`" data-pencode-region="`)
+	}
 	b.WriteString(`">`)
 	if activity {
 		hasDetails := i.text.Len() > 0 || i.output.Len() > 0 || i.data.Command != "" || len(i.data.Changes) > 0

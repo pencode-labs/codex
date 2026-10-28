@@ -65,7 +65,10 @@ func (a *agent) closeComposerMenus() error {
 	if err := a.closePermissions(); err != nil {
 		return err
 	}
-	return a.closeFiles()
+	if err := a.closeFiles(); err != nil {
+		return err
+	}
+	return a.closeRename()
 }
 
 func (a *agent) handlePermissionEvent(e peb.EditorEvent) error {

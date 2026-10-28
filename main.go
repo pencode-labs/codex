@@ -11,6 +11,7 @@ import (
 )
 
 type command struct {
+	title    *titleJob
 	action   bool
 	settings peb.SettingValues
 	context  peb.ActionContext

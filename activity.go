@@ -81,7 +81,7 @@ func (i *chatItem) activityKinds() activityKind {
 	return 0
 }
 
-func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem) []peb.EditorBinding {
+func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, sweep bool) []peb.EditorBinding {
 	first := items[0]
 	if first.groupRef == "" {
 		first.groupRef = "activity/" + first.data.ID
@@ -115,13 +115,12 @@ func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items
 	if kinds != activityReasoning {
 		kinds &^= activityReasoning
 	}
-	separator := ""
-	for _, entry := range activityKinds {
-		if kinds&entry.kind != 0 {
-			b.WriteString(separator)
-			b.WriteString(entry.label)
-			separator = "、"
-		}
+	if sweep && !first.groupExpanded {
+		var label strings.Builder
+		renderActivityTitle(&label, kinds)
+		renderSweepText(b, label.String())
+	} else {
+		renderActivityTitle(b, kinds)
 	}
 	b.WriteString(`</span>`)
 	if running {
@@ -149,6 +148,17 @@ func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items
 	}
 	b.WriteString(`</section>`)
 	return bindings
+}
+
+func renderActivityTitle(b *strings.Builder, kinds activityKind) {
+	separator := ""
+	for _, entry := range activityKinds {
+		if kinds&entry.kind != 0 {
+			b.WriteString(separator)
+			b.WriteString(entry.label)
+			separator = "、"
+		}
+	}
 }
 
 func renderActivityStatus(b *strings.Builder, status string) {
@@ -242,12 +252,14 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 			writeActivityCount(b, removed)
 		}
 	case "reasoning":
-		b.WriteString(fallback)
 		if text := strings.TrimSpace(i.text.String()); text != "" {
 			line, _, _ := strings.Cut(text, "\n")
-			b.WriteString(" · ")
-			b.WriteString(html.EscapeString(strings.Trim(line, "*# ")))
+			if line = strings.Trim(line, "*# \t\r"); line != "" {
+				b.WriteString(html.EscapeString(line))
+				return
+			}
 		}
+		b.WriteString(fallback)
 	default:
 		b.WriteString(html.EscapeString(fallback))
 	}

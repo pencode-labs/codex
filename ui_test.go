@@ -67,6 +67,13 @@ func TestHistoryRefreshRetainsPublishedChat(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.history.Data[0].Name = "Updated task"
+	a.historyLoading = true
+	loading := a.historyView()
+	validateBindings(t, loading)
+	if !strings.HasPrefix(loading.HTML, prefix) || !strings.Contains(loading.HTML, `disabled aria-busy="true"`) || !strings.Contains(loading.HTML, `class="codex-history-spinning"`) {
+		t.Fatal("loading history lost the chat or refresh indicator", loading.HTML)
+	}
+	a.historyLoading = false
 	refreshed := a.historyView()
 	validateBindings(t, refreshed)
 	if a.composerPrefix != prefix || !strings.HasPrefix(refreshed.HTML, prefix) || !strings.HasPrefix(initial.HTML, prefix) {
@@ -74,6 +81,9 @@ func TestHistoryRefreshRetainsPublishedChat(t *testing.T) {
 	}
 	if !strings.Contains(refreshed.HTML, "Updated task") || strings.Contains(refreshed.HTML, "Saved task") || c.draft != "draft still being typed" {
 		t.Fatal("refresh lost history updates or the current draft")
+	}
+	if strings.Contains(refreshed.HTML, `aria-busy="true"`) || strings.Contains(refreshed.HTML, `class="codex-history-spinning"`) {
+		t.Fatal("refresh indicator remained active after loading")
 	}
 	if !strings.Contains(a.composerView().HTML, "draft still being typed") {
 		t.Fatal("full updates lost the latest draft")
@@ -89,7 +99,14 @@ func TestHistoryRefreshOnlyDirtiesHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.client.close()
-	if !a.historyDirty || a.workspaceDirty || !a.dirty() {
+	if !a.historyDirty || a.historyLoading || a.workspaceDirty || !a.dirty() {
 		t.Fatal("history refresh must schedule only a history update")
+	}
+	a.client.close()
+	a.client = nil
+	a.context.ProjectPath = ""
+	a.historyDirty = false
+	if err := a.listHistory(""); err == nil || a.historyLoading || !a.historyDirty {
+		t.Fatal("failed history refresh did not clear the loading indicator", err)
 	}
 }

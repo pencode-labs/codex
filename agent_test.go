@@ -43,6 +43,8 @@ func fixtureServer() {
 	modelPages := 0
 	active := ""
 	threadPermissions := make(map[string]string)
+	titleThreads := make(map[string]bool)
+	names := make(map[string]string)
 	reader := bufio.NewScanner(os.Stdin)
 	for reader.Scan() {
 		var msg envelope
@@ -65,7 +67,17 @@ func fixtureServer() {
 			notify("turn/completed", map[string]any{"threadId": active, "turn": map[string]string{"id": "turn1", "status": "completed"}})
 			continue
 		}
-		response := func(v any) { send(map[string]any{"id": msg.ID, "result": v}) }
+		response := func(v any) {
+			if page, ok := v.(threadPage); ok {
+				for i := range page.Data {
+					if name := names[page.Data[i].ID]; name != "" {
+						page.Data[i].Name = name
+					}
+				}
+				v = page
+			}
+			send(map[string]any{"id": msg.ID, "result": v})
+		}
 		if msg.Method != "initialize" && !initialized {
 			os.Exit(3)
 		}
@@ -94,6 +106,8 @@ func fixtureServer() {
 		case "initialize":
 			fixtureWait("PENCODE_CODEX_STARTUP_GATE")
 			response(map[string]string{"userAgent": "fixture"})
+		case "config/read":
+			response(map[string]any{"config": map[string]any{"mcp_servers": map[string]any{"fixture": map[string]bool{"enabled": true}}}})
 		case "model/list":
 			modelPages++
 			var p struct {
@@ -108,11 +122,36 @@ func fixtureServer() {
 				response(map[string]any{"data": []modelOption{{Model: "fixture-luna", DisplayName: "Fixture Luna", DefaultReasoningEffort: "medium", SupportedReasoningEfforts: []reasoningEffortOption{{"low"}, {"medium"}, {"high"}}}}, "nextCursor": nil})
 			}
 		case "thread/start":
+			var p struct {
+				Ephemeral        bool                       `json:"ephemeral"`
+				Model            string                     `json:"model"`
+				Config           map[string]json.RawMessage `json:"config"`
+				BaseInstructions string                     `json:"baseInstructions"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			if p.Ephemeral && p.Model != "gpt-6-luna" {
+				os.Exit(8)
+			}
+			if p.Ephemeral && (permissions.Sandbox != "read-only" || permissions.ApprovalPolicy != "never" || p.BaseInstructions != titleInstructions || string(p.Config["mcp_servers"]) != `{"fixture":{"enabled":false}}` || string(p.Config["features.shell_tool"]) != "false") {
+				os.Exit(6)
+			}
 			count++
 			active = fmt.Sprintf("thread%d", count)
+			titleThreads[active] = p.Ephemeral
 			threadPermissions[active] = preset + permissions.Sandbox
 			response(map[string]any{"thread": map[string]string{"id": active, "cwd": mustGetwd()}})
 		case "thread/name/set":
+			var p struct {
+				ThreadID string `json:"threadId"`
+				Name     string `json:"name"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			if p.Name == "reject name" {
+				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "rename failed"}})
+				continue
+			}
+			names[p.ThreadID] = p.Name
+			notify("thread/name/updated", map[string]string{"threadId": p.ThreadID, "threadName": p.Name})
 			response(struct{}{})
 		case "thread/list":
 			fixtureWait("PENCODE_CODEX_HISTORY_GATE")
@@ -143,7 +182,11 @@ func fixtureServer() {
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			threadPermissions[p.ThreadID] = preset + permissions.Sandbox
-			response(map[string]any{"thread": map[string]string{"id": p.ThreadID, "name": "Saved task", "cwd": mustGetwd()}})
+			name := names[p.ThreadID]
+			if name == "" {
+				name = "Saved task"
+			}
+			response(map[string]any{"thread": map[string]string{"id": p.ThreadID, "name": name, "cwd": mustGetwd()}})
 		case "thread/turns/list":
 			var p struct {
 				Cursor string `json:"cursor"`
@@ -158,7 +201,13 @@ func fixtureServer() {
 					itemID, text = "older-reply", "Older conversation"
 				}
 			}
-			response(map[string]any{"data": []map[string]any{{"id": "old-turn", "status": "completed", "items": []map[string]string{{"id": itemID, "type": "agentMessage", "text": text}}}}, "nextCursor": nextCursor})
+			stored := map[string]any{"id": "old-turn", "status": "completed", "items": []map[string]string{{"id": itemID, "type": "agentMessage", "text": text}}}
+			if os.Getenv("PENCODE_CODEX_TURN_DURATION") == "1" {
+				stored["durationMs"] = 112000
+			} else if os.Getenv("PENCODE_CODEX_TURN_DURATION") == "started-only" {
+				stored["startedAt"] = 100
+			}
+			response(map[string]any{"data": []map[string]any{stored}, "nextCursor": nextCursor})
 		case "turn/start":
 			var p struct {
 				ThreadID string  `json:"threadId"`
@@ -167,6 +216,31 @@ func fixtureServer() {
 				Effort   string  `json:"effort"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
+			if titleThreads[p.ThreadID] {
+				if p.Effort != "low" {
+					os.Exit(9)
+				}
+				fixtureWait("PENCODE_CODEX_TITLE_GATE")
+				var schema struct {
+					OutputSchema json.RawMessage `json:"outputSchema"`
+				}
+				_ = json.Unmarshal(msg.Params, &schema)
+				if len(schema.OutputSchema) == 0 {
+					os.Exit(7)
+				}
+				text, status := `{"title":"实现功能"}`, "completed"
+				if p.Input[0].Text == "invalid title" {
+					text = "not json"
+				} else if p.Input[0].Text == "empty title" {
+					text = `{"title":"   "}`
+				} else if p.Input[0].Text == "title failure" {
+					status = "failed"
+				}
+				response(map[string]any{"turn": map[string]string{"id": "title-turn", "status": "inProgress"}})
+				notify("item/completed", map[string]any{"threadId": p.ThreadID, "item": map[string]string{"id": "title", "type": "agentMessage", "text": text}})
+				notify("turn/completed", map[string]any{"threadId": p.ThreadID, "turn": map[string]string{"id": "title-turn", "status": status}})
+				continue
+			}
 			if len(p.Input) > 0 && p.Input[0].Text == "implement feature" && (p.Model != "fixture-luna" || p.Effort != "high") {
 				os.Exit(5)
 			}
@@ -287,6 +361,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		}
 		write(peb.UIRequest, id, data)
 	}
+	var views peb.ViewReceiver
 	waitUI := func(surface, contains string) peb.UI {
 		t.Helper()
 		deadline := time.After(10 * time.Second)
@@ -307,7 +382,11 @@ func TestAgentPEBWorkflow(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if ui.Kind == peb.Panel || ui.ID != "composer" && ui.ID != "models" && ui.ID != "permissions" && ui.ID != "files" && ui.ID != "error" {
+				ui, err = views.Apply(ui)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ui.Kind == peb.Panel || ui.ID != "composer" && ui.ID != "models" && ui.ID != "permissions" && ui.ID != "files" && ui.ID != "rename" && ui.ID != "error" {
 					t.Fatal("chat opened an extra surface", ui)
 				}
 				if ui.View != nil {
@@ -338,7 +417,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if err := os.WriteFile(gate, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if ui := waitUI("composer", "startup draft"); ui.Kind != peb.EditorTab || !strings.Contains(ui.View.HTML, "Saved task") {
+	if ui := waitUI("composer", "Saved task"); ui.Kind != peb.EditorTab || !strings.Contains(ui.View.HTML, "startup draft") || strings.Contains(ui.View.HTML, `class="codex-history-spinning"`) {
 		t.Fatal("chat workspace is not an editor tab")
 	}
 	// Invoking the entry always opens or reveals, even before a close event arrives.
@@ -439,12 +518,19 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	waitUI("composer", "Fixture Luna")
 	event("composer", "click", "send", "")
 	// The first paint must already offer Stop, before the server acknowledges.
-	firstPaint := waitUI("composer", "给 Codex 的任务").View
+	firstUpdate := waitUI("composer", "给 Codex 的任务")
+	if !firstUpdate.Busy {
+		t.Fatal("tab must show processing before turn acknowledgement")
+	}
+	firstPaint := firstUpdate.View
 	checkComposerAction(t, firstPaint, true)
-	if !strings.Contains(firstPaint.HTML, `data-ref="history/thread1" aria-current="true">implement feature</button>`) {
+	if !strings.Contains(firstPaint.HTML, "正在思考") {
+		t.Fatal("first paint must show thinking before turn acknowledgement", firstPaint.HTML)
+	}
+	if !strings.Contains(firstPaint.HTML, `data-ref="history/thread1" aria-current="true">Codex 新会话</button>`) {
 		t.Fatal("new conversation missing from history before turn acknowledgement", firstPaint.HTML)
 	}
-	if ui := waitUI("composer", "fixture approval"); ui.Kind != peb.EditorTab || ui.Title != "implement feature" {
+	if ui := waitUI("composer", "fixture approval"); ui.Kind != peb.EditorTab || ui.Title == "implement feature" {
 		t.Fatal("missing conversation tab", ui)
 	} else if !strings.Contains(ui.View.HTML, "Thread permissions: on-request/user/workspace-write; Turn permissions: on-request/user/workspaceWrite; network=false; Effort: high") {
 		t.Fatal("default permissions were not sent", ui.View.HTML)
@@ -453,10 +539,41 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	}
 	event("composer", "click", "accept/100", "")
 	ui := waitUI("composer", "Final reply")
+	if ui.Busy {
+		t.Fatal("completed turn retained the tab processing icon")
+	}
 	checkComposerAction(t, ui.View, false)
 	if strings.Contains(ui.View.HTML, "tests passed") {
 		t.Fatal("command details should start collapsed", ui.View.HTML)
 	}
+	event("composer", "click", "refresh-history", "")
+	if ui := waitUI("composer", "实现功能</button>"); ui.Title != "实现功能" {
+		t.Fatal("generated title did not update the tab and history", ui)
+	}
+	event("composer", "click", "rename/thread1", "")
+	validateBindings(t, waitUI("rename", `value="实现功能"`).View)
+	event("rename", "input", "rename-title", "   ")
+	event("rename", "submit", "rename-form", "")
+	waitUI("error", "会话标题不能为空")
+	event("rename", "input", "rename-title", "reject name")
+	event("rename", "submit", "rename-form", "")
+	waitUI("error", "rename failed")
+	event("rename", "input", "rename-title", " 手动标题 <任务> ")
+	event("rename", "submit", "rename-form", "")
+	if ui := waitUI("composer", "手动标题 &lt;任务&gt;</button>"); ui.Title != "手动标题 <任务>" {
+		t.Fatal("manual title did not update the tab", ui)
+	}
+	// Renaming an unopened history entry must not change the selected chat.
+	event("composer", "click", "rename/saved", "")
+	waitUI("rename", `value="Saved task"`)
+	event("rename", "input", "rename-title", "历史标题")
+	event("rename", "submit", "rename-form", "")
+	if ui := waitUI("composer", "历史标题</button>"); ui.Title != "手动标题 <任务>" {
+		t.Fatal("renaming history changed the selected conversation", ui)
+	}
+	event("composer", "click", "rename/saved", "")
+	waitUI("rename", `value="历史标题"`)
+	event("rename", "click", "rename-cancel", "")
 	event("composer", "click", "activity/cmd", "")
 	waitUI("composer", `data-ref="item/cmd" aria-expanded="false"`)
 	event("composer", "click", "item/cmd", "")
@@ -504,14 +621,19 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	action()
 	waitUI("composer", "给 Codex 的任务")
 	event("composer", "click", "history", "")
-	waitUI("composer", "Saved task")
+	waitUI("composer", "历史标题")
 	event("composer", "click", "history/saved", "")
 	waitUI("composer", "Stored conversation")
-	// An idle conversation must reopen with its transcript while history is slow.
+	// Closing exits the conversation even while history is slow; it remains
+	// available in history and retains its draft when explicitly resumed.
 	if err := os.Remove(historyGate); err != nil {
 		t.Fatal(err)
 	}
+	event("composer", "input", "prompt", "draft while history loads")
 	event("composer", "click", "refresh-history", "")
+	if ui := waitUI("composer", `class="codex-history-spinning"`); !strings.Contains(ui.View.HTML, `disabled aria-busy="true"`) || !strings.Contains(ui.View.HTML, "Stored conversation") {
+		t.Fatal("pending refresh did not retain the chat and show loading", ui)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, err := os.Stat(historyGate + ".waiting"); err == nil {
@@ -522,14 +644,18 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	event("composer", "input", "prompt", "draft while history loads")
 	event("composer", "close", "", "")
 	action()
-	waitUI("composer", "Stored conversation")
+	if ui := waitUI("composer", "给 Codex 的任务"); strings.Contains(ui.View.HTML, "Stored conversation") || ui.Busy {
+		t.Fatal("reopening retained the exited conversation", ui)
+	}
 	if err := os.WriteFile(historyGate, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	waitUI("composer", "draft while history loads")
+	event("composer", "click", "history/saved", "")
+	if ui := waitUI("composer", "draft while history loads"); strings.Contains(ui.View.HTML, `class="codex-history-spinning"`) {
+		t.Fatal("completed refresh retained the loading indicator", ui)
+	}
 	// A failed turn must preserve the user's input instead of silently losing it.
 	event("composer", "input", "prompt", "fail")
 	addFile(attachment)
@@ -706,7 +832,7 @@ func TestHistoryRetainsNewThreadsAndDeduplicatesPages(t *testing.T) {
 	if !a.showHistory || len(a.history.Data) != 1 || a.history.Data[0].ID != "saved" {
 		t.Fatal("listing history did not load the saved thread", a.history)
 	}
-	c, err := a.startThread("new task")
+	c, err := a.startThread()
 	if err != nil {
 		t.Fatal(err)
 	}

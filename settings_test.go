@@ -97,7 +97,11 @@ func TestExecutablePathStartsClientAndUpdatesWithoutInterrupting(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	relative := filepath.Join("tools with spaces", "codex"+filepath.Ext(executable))
+	name := "codex"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	relative := filepath.Join("tools with spaces", name)
 	path := filepath.Join(root, relative)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

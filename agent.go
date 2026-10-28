@@ -48,10 +48,13 @@ type threadItem struct {
 	Query            string          `json:"query"`
 }
 type turn struct {
-	ID     string       `json:"id"`
-	Status string       `json:"status"`
-	Items  []threadItem `json:"items"`
-	Error  *rpcError    `json:"error"`
+	ID          string       `json:"id"`
+	Status      string       `json:"status"`
+	Items       []threadItem `json:"items"`
+	Error       *rpcError    `json:"error"`
+	StartedAt   int64        `json:"startedAt"`
+	CompletedAt int64        `json:"completedAt"`
+	DurationMs  *int64       `json:"durationMs"`
 }
 type thread struct {
 	ID      string `json:"id"`
@@ -60,6 +63,7 @@ type thread struct {
 }
 type chatItem struct {
 	data          threadItem
+	progress      *turnProgress
 	text, output  strings.Builder
 	complete      bool
 	expanded      bool
@@ -76,6 +80,8 @@ type approval struct {
 }
 type conversation struct {
 	thread
+	titleJob              *titleJob
+	progress              *turnProgress
 	context               peb.ActionContext
 	items                 []*chatItem
 	requests              []*approval
@@ -83,6 +89,7 @@ type conversation struct {
 	status                string
 	turnRevision          uint64
 	busy, dirty, loaded   bool
+	exitRequested         bool
 }
 type threadPage struct {
 	Data       []thread `json:"data"`
@@ -129,7 +136,7 @@ type agent struct {
 	effort, pendingModel                       string
 	history                                    threadPage
 	showHistory, workspaceOpen, workspaceDirty bool
-	historyDirty                               bool
+	historyDirty, historyLoading               bool
 	composerPrefix                             string
 	composerBindings                           []peb.EditorBinding
 	revealWorkspace                            bool
@@ -139,6 +146,8 @@ type agent struct {
 	modelError                                 string
 	permissionIndex                            int
 	permissionSettings, permissionHelp         bool
+	renameID, renameValue                      string
+	exitsPending                               bool
 }
 
 func (a *agent) run() {
@@ -149,8 +158,15 @@ func (a *agent) run() {
 	flush := time.NewTimer(time.Hour)
 	flush.Stop()
 	defer flush.Stop()
+	progressTimer := time.NewTimer(time.Hour)
+	progressTimer.Stop()
+	defer progressTimer.Stop()
+	var progressTick <-chan time.Time
 	var tick <-chan time.Time
 	for {
+		if a.exitsPending {
+			a.exitConversations()
+		}
 		var messages <-chan envelope
 		if a.client != nil {
 			messages = a.client.messages
@@ -174,10 +190,22 @@ func (a *agent) run() {
 					break
 				}
 				a.onMessage(message)
+			case <-progressTick:
+				a.updateProgress(time.Now())
+				progressTick = nil
 			case <-tick:
 				a.flush()
 				tick = nil
 			}
+		}
+		if a.progressVisible() {
+			if progressTick == nil {
+				progressTimer.Reset(time.Second)
+				progressTick = progressTimer.C
+			}
+		} else if progressTick != nil {
+			progressTimer.Stop()
+			progressTick = nil
 		}
 		if tick == nil && a.dirty() {
 			flush.Reset(80 * time.Millisecond)
@@ -245,14 +273,32 @@ func (a *agent) selectConversation(c *conversation) {
 func (a *agent) closeWorkspace() error {
 	a.workspaceOpen, a.revealWorkspace = false, false
 	a.composerPrefix, a.composerBindings = "", nil
-	// Keep the selected transcript so reopening does not require another RPC.
+	if c := a.selected; c != nil && c.busy {
+		c.exitRequested, a.exitsPending = true, true
+	}
+	a.selected = nil
 	for _, c := range a.conversations {
-		if c != a.selected && !c.busy {
+		if !c.busy {
 			c.items = nil
 			c.loaded = false
 		}
 	}
 	return a.closeComposerMenus()
+}
+
+func (a *agent) exitConversations() {
+	a.exitsPending = false
+	for _, c := range a.conversations {
+		if !c.exitRequested {
+			continue
+		}
+		c.exitRequested = false
+		// Tab closes can arrive inside an RPC wait. Interrupt from the actor
+		// loop after that request returns, including a pending turn/start.
+		a.reportError(a.interrupt(c))
+		c.items, c.requests = nil, nil
+		c.loaded = false
+	}
 }
 
 func (a *agent) disconnected() {
@@ -262,6 +308,7 @@ func (a *agent) disconnected() {
 	a.models, a.modelsLoaded = nil, false
 	a.status = fmt.Sprintf("Codex 连接已断开：%v。重新发送或打开历史可重连。", err)
 	for _, c := range a.conversations {
+		c.finishProgress(turn{}, time.Now())
 		c.loaded, c.busy = false, false
 		c.turnID = ""
 		c.requests = nil
@@ -314,6 +361,9 @@ func (a *agent) openWorkspace(ctx peb.ActionContext) error {
 }
 
 func (a *agent) handleCommand(cmd command) error {
+	if cmd.title != nil {
+		return a.finishTitle(cmd.title)
+	}
 	if cmd.settings != nil {
 		path, err := peb.DecodeSetting[string](cmd.settings, "executablePath")
 		if err == nil {
@@ -333,6 +383,9 @@ func (a *agent) handleCommand(cmd command) error {
 		return a.listHistory("")
 	}
 	e := cmd.event
+	if e.ID == "rename" {
+		return a.handleRenameEvent(e.Event)
+	}
 	if e.ID == "models" {
 		return a.handleModelEvent(e.Event)
 	}
@@ -418,6 +471,9 @@ func (a *agent) handleCommand(cmd command) error {
 				return a.loadHistory(c)
 			}
 		default:
+			if id, ok := strings.CutPrefix(e.Event.Ref, "rename/"); ok {
+				return a.openRename(id)
+			}
 			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-file/"); ok {
 				a.removeAttachment(index)
 				return nil
@@ -455,7 +511,7 @@ func (a *agent) handleCommand(cmd command) error {
 	return nil
 }
 
-func (a *agent) startThread(prompt string) (*conversation, error) {
+func (a *agent) startThread() (*conversation, error) {
 	p := a.permission()
 	params := struct {
 		Cwd     string `json:"cwd"`
@@ -473,7 +529,6 @@ func (a *agent) startThread(prompt string) (*conversation, error) {
 		return nil, fmt.Errorf("Codex 未返回会话 ID")
 	}
 	c := &conversation{thread: result.Thread, context: a.context, loaded: true, dirty: true}
-	c.Name = shortTitle(prompt)
 	a.conversations[c.ID] = c
 	a.history.include(c.thread)
 	a.showHistory = true
@@ -514,11 +569,7 @@ func (a *agent) send() error {
 	fresh := c == nil
 	if fresh {
 		var err error
-		title := prompt
-		if strings.TrimSpace(title) == "" {
-			title = filepath.Base(files[0])
-		}
-		c, err = a.startThread(title)
+		c, err = a.startThread()
 		if err != nil {
 			return err
 		}
@@ -535,8 +586,13 @@ func (a *agent) send() error {
 	if c.busy {
 		return fmt.Errorf("当前会话仍有任务在运行，请等待完成或点击停止")
 	}
+	if !a.workspaceOpen {
+		a.selected = nil
+		return nil
+	}
 	// Show the stop action before waiting for turn/start to acknowledge the task.
 	c.busy, c.dirty = true, true
+	c.progress = &turnProgress{started: time.Now()}
 	c.status = ""
 	a.flush()
 	p := a.permission()
@@ -552,6 +608,7 @@ func (a *agent) send() error {
 		Turn turn `json:"turn"`
 	}](a.client, "turn/start", params)
 	if err != nil {
+		c.finishProgress(turn{}, time.Now())
 		c.busy = false
 		c.dirty = true
 		return err
@@ -559,6 +616,9 @@ func (a *agent) send() error {
 	c.busy = c.busy && result.Turn.Status == "inProgress"
 	if c.busy {
 		c.turnID = result.Turn.ID
+		c.startProgress(result.Turn, time.Now())
+	} else {
+		c.finishProgress(result.Turn, time.Now())
 	}
 	c.draft = ""
 	delete(a.attachments, a.attachmentScope())
@@ -567,11 +627,8 @@ func (a *agent) send() error {
 	}
 	a.status = ""
 	a.workspaceDirty, c.dirty = true, true
-	if fresh {
-		_, err = call[json.RawMessage](a.client, "thread/name/set", map[string]string{"threadId": c.ID, "name": c.Name})
-		if err != nil {
-			fmt.Fprintln(stderrWriter, err)
-		}
+	if c.Name == "" && c.titleJob == nil && !c.exitRequested {
+		a.generateTitle(c, attachmentPrompt(prompt, files))
 	}
 	return nil
 }
@@ -585,6 +642,13 @@ func (a *agent) interrupt(c *conversation) error {
 }
 
 func (a *agent) listHistory(cursor string) error {
+	a.historyLoading, a.historyDirty = true, true
+	if a.publisher != nil {
+		a.flush()
+	}
+	defer func() {
+		a.historyLoading, a.historyDirty = false, true
+	}()
 	if err := a.connect(); err != nil {
 		return err
 	}
@@ -639,6 +703,7 @@ func (a *agent) resume(id string) error {
 		c.thread = result.Thread
 		c.loaded = true
 		c.items = nil
+		c.progress = nil
 		c.cursor = ""
 		if err = a.loadHistory(c); err != nil {
 			c.loaded = false
@@ -658,6 +723,9 @@ func (a *agent) resume(id string) error {
 func (c *conversation) title() string {
 	if c.Name != "" {
 		return c.Name
+	}
+	if c.titleJob != nil {
+		return "正在生成标题…"
 	}
 	return shortTitle(c.Preview)
 }
@@ -683,13 +751,27 @@ func (a *agent) loadHistory(c *conversation) error {
 	var older []*chatItem
 	slices.Reverse(page.Data)
 	for _, t := range page.Data {
+		var progress *turnProgress
+		if c.progress != nil && c.progress.id == t.ID {
+			progress = c.progress
+		} else if t.DurationMs != nil || t.StartedAt > 0 && t.CompletedAt > 0 {
+			progress = &turnProgress{}
+			progress.update(t, time.Now())
+		}
 		if t.Status == "inProgress" && c.turnRevision == revision {
 			c.busy = true
 			c.turnID = t.ID
+			c.startProgress(t, time.Now())
+			progress = c.progress
 		}
 		for _, item := range t.Items {
 			if !slices.ContainsFunc(c.items, func(i *chatItem) bool { return i.data.ID == item.ID }) {
-				older = append(older, newChatItem(item, t.Status != "inProgress"))
+				i := newChatItem(item, t.Status != "inProgress")
+				i.progress = progress
+				if progress != nil && i.modelText() {
+					progress.received = true
+				}
+				older = append(older, i)
 			}
 		}
 	}
@@ -747,6 +829,7 @@ func (c *conversation) item(id string) *chatItem {
 		}
 	}
 	i := newChatItem(threadItem{ID: id, Type: "agentMessage"}, false)
+	i.progress = c.progress
 	c.items = append(c.items, i)
 	return i
 }
@@ -767,6 +850,10 @@ func (a *agent) onMessage(message envelope) {
 	}
 	if err := json.Unmarshal(message.Params, &event); err != nil {
 		fmt.Fprintln(stderrWriter, err)
+		return
+	}
+	if message.Method == "thread/name/updated" {
+		a.updateThreadName(event.ThreadID, event.ThreadName)
 		return
 	}
 	c := a.conversations[event.ThreadID]
@@ -790,29 +877,34 @@ func (a *agent) onMessage(message envelope) {
 	}
 	switch message.Method {
 	case "item/started", "item/completed":
-		c.item(event.Item.ID).replace(event.Item, message.Method == "item/completed")
+		i := c.item(event.Item.ID)
+		i.replace(event.Item, message.Method == "item/completed")
+		if i.progress != nil && i.modelText() {
+			i.progress.received = true
+		}
 	case "item/agentMessage/delta", "item/plan/delta", "item/reasoning/summaryTextDelta":
 		i := c.item(event.ItemID)
 		appendText(&i.text, event.Delta)
 		i.html = ""
+		if c.progress != nil && event.Delta != "" {
+			c.progress.received = true
+		}
+	case "item/reasoning/textDelta":
+		if c.progress != nil && event.Delta != "" {
+			c.progress.received = true
+		}
 	case "item/commandExecution/outputDelta":
 		i := c.item(event.ItemID)
 		appendText(&i.output, event.Delta)
 		i.html = ""
-	case "thread/name/updated":
-		c.Name = event.ThreadName
-		for i := range a.history.Data {
-			if a.history.Data[i].ID == c.ID {
-				a.history.Data[i].Name = c.Name
-				a.workspaceDirty = true
-			}
-		}
 	case "turn/started":
 		c.turnRevision++
 		c.busy = true
 		c.status = ""
 		c.turnID = event.Turn.ID
+		c.startProgress(event.Turn, time.Now())
 	case "turn/completed":
+		c.finishProgress(event.Turn, time.Now())
 		c.turnRevision++
 		c.busy = false
 		c.turnID = ""

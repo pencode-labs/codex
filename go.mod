@@ -7,4 +7,6 @@ require (
 	github.com/yuin/goldmark/v2 v2.1.9
 )
 
+require golang.org/x/net v0.61.0 // indirect
+
 replace github.com/pencode-labs/pencode => ../..
