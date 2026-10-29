@@ -228,7 +228,7 @@ func (a *agent) openRename(id string) error {
 		ID: "rename", Title: "修改会话标题", Kind: peb.Dialog, Context: a.context,
 		Placement: peb.UIPlacement{Width: 420},
 		View: &peb.EditorView{
-			HTML:   `<section class="codex-files"><form data-ref="rename-form" data-pencode-focus="rename-title"><label for="pencode-extension-rename-title">会话标题</label><div class="codex-file-path"><input id="pencode-extension-rename-title" data-ref="rename-title" aria-label="会话标题" placeholder="输入会话标题" value="` + html.EscapeString(a.renameValue) + `"><button type="submit">保存</button><button data-ref="rename-cancel" type="button">取消</button></div></form></section>`,
+			HTML:   `<section class="codex-files"><form data-ref="rename-form" data-pencode-focus="rename-title"><div class="codex-file-path"><input id="pencode-extension-rename-title" data-ref="rename-title" aria-label="会话标题" placeholder="输入会话标题" value="` + html.EscapeString(a.renameValue) + `"><button type="submit">保存</button><button data-ref="rename-cancel" type="button">取消</button></div></form></section>`,
 			CSS:    chatCSS,
 			Events: []peb.EditorBinding{{Ref: "rename-title", Kind: "input"}, {Ref: "rename-form", Kind: "submit"}, {Ref: "rename-cancel", Kind: "click"}},
 		},
