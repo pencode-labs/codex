@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"html"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,8 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 			notify("turn/completed", map[string]any{"threadId": c.ID, "turn": turn{ID: "one", Status: status}})
 			view := a.composerView()
 			validateBindings(t, view)
-			if strings.Count(view.HTML, `class="codex-changes"`) != 1 || !strings.Contains(view.HTML, "已编辑 1 个文件") || !strings.Contains(view.HTML, "src/&lt;file&gt;.go") || strings.Contains(view.HTML, "excluded.go") || strings.Contains(view.HTML, "<pre>") {
+			path := html.EscapeString(filepath.Join("src", "<file>.go"))
+			if strings.Count(view.HTML, `class="codex-changes"`) != 1 || !strings.Contains(view.HTML, "已编辑 1 个文件") || !strings.Contains(view.HTML, path) || strings.Contains(view.HTML, "excluded.go") || strings.Contains(view.HTML, "<pre>") {
 				t.Fatal("completion did not display only successful edits", view.HTML)
 			}
 			if strings.Index(view.HTML, "修改完成") > strings.Index(view.HTML, `class="codex-changes"`) {
@@ -63,7 +65,7 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 			clickActivity(t, a, "changes/one")
 			view = a.composerView()
 			validateBindings(t, view)
-			if !strings.Contains(view.HTML, "src/&lt;file&gt;.go") || strings.Contains(view.HTML, "<pre>") || !strings.Contains(view.HTML, "展开文件") {
+			if !strings.Contains(view.HTML, path) || strings.Contains(view.HTML, "<pre>") || !strings.Contains(view.HTML, "展开文件") {
 				t.Fatal("file list did not collapse", view.HTML)
 			}
 			clickActivity(t, a, "changes-diff/one")
