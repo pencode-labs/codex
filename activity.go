@@ -237,15 +237,7 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 				b.WriteString("、")
 			}
 			b.WriteString(html.EscapeString(filepath.Base(change.Path)))
-			added, removed := 0, 0
-			for line := range strings.Lines(change.Diff) {
-				switch {
-				case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-					added++
-				case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-					removed++
-				}
-			}
+			added, removed := change.lineCounts()
 			b.WriteString(" +")
 			writeActivityCount(b, added)
 			b.WriteString(" -")

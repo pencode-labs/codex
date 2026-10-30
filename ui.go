@@ -219,8 +219,16 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 	// Render only changed items. Reserve room for approvals and keep the latest
 	// messages visible even when an old command produced a large amount of output.
 	start, size := len(c.items), 0
+	var files *turnFiles
 	for start > 0 {
 		i := c.items[start-1]
+		if i.files != files {
+			files = i.files
+			files.prepare()
+			if files != nil {
+				size += len(files.html)
+			}
+		}
 		if i.html == "" {
 			var fragment strings.Builder
 			i.render(&fragment)
@@ -252,15 +260,20 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 		}
 	}
 	var progress *turnProgress
+	files = nil
 	for index := start; index < len(c.items); {
 		i := c.items[index]
+		if i.files != files {
+			bindings = files.render(b, bindings)
+			files = i.files
+		}
 		if i.data.Type != "userMessage" && i.progress != nil && i.progress != progress {
 			i.progress.render(b)
 			progress = i.progress
 		}
 		if i.activityKinds() != 0 {
 			end := index + 1
-			for end < len(c.items) && c.items[end].activityKinds() != 0 && c.items[end].progress == i.progress {
+			for end < len(c.items) && c.items[end].activityKinds() != 0 && c.items[end].progress == i.progress && c.items[end].files == i.files {
 				end++
 			}
 			bindings = renderActivityGroup(b, bindings, c.items[index:end], latestActivity >= index && latestActivity < end)
@@ -277,6 +290,7 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 		}
 		index++
 	}
+	bindings = files.render(b, bindings)
 	if c.progress != nil && c.progress != progress {
 		c.progress.render(b)
 	}

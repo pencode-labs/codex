@@ -1,12 +1,41 @@
 package main
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/pencode-labs/pencode/peb"
 )
+
+func TestHistorySkipsBlockedRolloutScan(t *testing.T) {
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PENCODE_CODEX_PATH", path)
+	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	t.Setenv("PENCODE_CODEX_HISTORY_PAGES", "1")
+	t.Setenv("PENCODE_CODEX_HISTORY_SCAN_GATE", filepath.Join(t.TempDir(), "blocked"))
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	a := &agent{ctx: ctx, context: peb.ActionContext{ProjectPath: t.TempDir()}}
+	defer func() { a.client.close() }()
+	for _, cursor := range []string{"", "", "second"} {
+		if err := a.listHistory(cursor); err != nil {
+			t.Fatal("history waited for rollout scanning", err)
+		}
+		if !a.history.contains("saved") || a.historyLoading {
+			t.Fatal("history did not finish loading", a.history)
+		}
+	}
+	if !a.history.contains("older") || a.history.NextCursor != "" {
+		t.Fatal("state database history lost pagination", a.history)
+	}
+}
 
 func TestHistoryCompactionPreservesOrderWithoutAllocations(t *testing.T) {
 	data := []thread{{ID: "first"}, {ID: "second"}, {ID: "first"}, {}, {ID: "third"}, {ID: "second"}}

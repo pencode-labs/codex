@@ -1,7 +1,7 @@
 .codex-workspace { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--vscode-editor-foreground); }
 .codex-chat-pane { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .codex-transcript { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
-.codex-transcript, .codex-sidebar, .codex-history-list, .codex-activity-list, .codex-chat pre, .codex-composer textarea { scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+.codex-transcript, .codex-sidebar, .codex-history-list, .codex-activity-list, .codex-changes-list, .codex-chat pre, .codex-composer textarea { scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
 .codex-sidebar { display: flex; flex-direction: column; flex: 0 0 auto; width: 28%; min-width: 240px; max-width: 340px; min-height: 0; padding: 16px; overflow: auto; border-left: 1px solid var(--vscode-editorGroup-border); background: var(--vscode-sideBar-background); }
 .codex-chat-pane > .codex-composer { flex: 0 0 auto; padding: 12px 8px 16px; }
 .codex-chat, .codex-composer { color: var(--vscode-editor-foreground); font-size: 13px; line-height: 1.6; }
@@ -82,6 +82,23 @@
 .codex-message > :last-child, .codex-activity-details > :last-child { margin-bottom: 0; }
 .codex-activity { margin: 4px 0; color: var(--vscode-descriptionForeground); }
 .codex-turn-progress { flex: 0 0 auto; margin: 12px 0 4px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-editorGroup-border); color: var(--vscode-descriptionForeground); font-size: 13px; }
+.codex-changes { flex: 0 0 auto; min-width: 0; margin: 12px 0; border: 1px solid var(--vscode-editorGroup-border); border-radius: 12px; background: var(--vscode-editorWidget-background); overflow: hidden; }
+.codex-changes-header { display: flex; align-items: center; gap: 10px; padding: 12px; }
+.codex-changes-header > img { flex-shrink: 0; width: 16px; height: 16px; }
+.codex-changes-title { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.codex-change-counts { display: flex; flex-shrink: 0; gap: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.codex-change-added { color: var(--vscode-gitDecoration-addedResourceForeground); }
+.codex-change-removed { color: var(--vscode-gitDecoration-deletedResourceForeground); }
+.codex-changes-list { max-height: 320px; overflow: auto; border-top: 1px solid var(--vscode-editorGroup-border); }
+.codex-changes-preview { max-height: none; overflow: hidden; }
+.codex-chat .codex-change-file { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 6px 12px; border-radius: 0; color: var(--vscode-editor-foreground); background: transparent; text-align: left; }
+.codex-chat .codex-change-file:hover { background: var(--vscode-list-hoverBackground); }
+.codex-change-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codex-change-diff { padding: 0 12px; }
+.codex-change-diff pre { margin: 0 0 8px; }
+.codex-chat .codex-changes-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 12px; border-radius: 0; color: var(--vscode-descriptionForeground); background: transparent; text-align: left; }
+.codex-changes-toggle img { width: 12px; height: 12px; }
+.codex-changes-toggle[aria-expanded="true"] img { transform: rotate(180deg); }
 .codex-sweep-text { color: var(--vscode-editor-foreground); }
 .codex-sweep-text > span { opacity: .5; animation: codex-activity-sweep 2.4s linear infinite; }
 @keyframes codex-activity-sweep {

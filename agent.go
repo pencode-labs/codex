@@ -24,6 +24,9 @@ type input struct {
 type change struct {
 	Path string `json:"path"`
 	Diff string `json:"diff"`
+	Kind struct {
+		Type string `json:"type"`
+	} `json:"kind"`
 }
 type commandAction struct {
 	Type    string `json:"type"`
@@ -64,6 +67,7 @@ type thread struct {
 type chatItem struct {
 	data          threadItem
 	progress      *turnProgress
+	files         *turnFiles
 	text, output  strings.Builder
 	complete      bool
 	expanded      bool
@@ -82,6 +86,7 @@ type conversation struct {
 	thread
 	titleJob              *titleJob
 	progress              *turnProgress
+	files                 *turnFiles
 	context               peb.ActionContext
 	items                 []*chatItem
 	requests              []*approval
@@ -152,7 +157,7 @@ type agent struct {
 
 func (a *agent) run() {
 	defer close(a.done)
-	defer func() { a.client.close() }()
+	defer a.closeClient()
 	a.conversations = make(map[string]*conversation)
 	a.drafts = make(map[string]string)
 	flush := time.NewTimer(time.Hour)
@@ -257,13 +262,17 @@ func (a *agent) dirty() bool {
 	return a.workspaceOpen && (a.workspaceDirty || a.historyDirty || a.selected != nil && a.selected.dirty)
 }
 
-// Keep drafts and running tasks when leaving a conversation; reload idle output
-// from Codex on return instead of retaining every visited transcript.
+// Release the previous conversation after any pending RPC returns. Drafts and
+// history remain available when the conversation is resumed later.
 func (a *agent) selectConversation(c *conversation) {
 	if a.selected != c {
-		if previous := a.selected; previous != nil && !previous.busy {
-			previous.items = nil
-			previous.loaded = false
+		if previous := a.selected; previous != nil {
+			previous.exitRequested, a.exitsPending = true, true
+			if !previous.busy {
+				previous.items = nil
+				previous.files = nil
+				previous.loaded = false
+			}
 		}
 		a.selected = c
 	}
@@ -273,13 +282,14 @@ func (a *agent) selectConversation(c *conversation) {
 func (a *agent) closeWorkspace() error {
 	a.workspaceOpen, a.revealWorkspace = false, false
 	a.composerPrefix, a.composerBindings = "", nil
-	if c := a.selected; c != nil && c.busy {
-		c.exitRequested, a.exitsPending = true, true
+	if a.client != nil {
+		a.exitsPending = true
 	}
-	a.selected = nil
+	a.selectConversation(nil)
 	for _, c := range a.conversations {
 		if !c.busy {
 			c.items = nil
+			c.files = nil
 			c.loaded = false
 		}
 	}
@@ -287,17 +297,36 @@ func (a *agent) closeWorkspace() error {
 }
 
 func (a *agent) exitConversations() {
+	if !a.exitsPending {
+		return
+	}
 	a.exitsPending = false
 	for _, c := range a.conversations {
 		if !c.exitRequested {
 			continue
 		}
-		c.exitRequested = false
 		// Tab closes can arrive inside an RPC wait. Interrupt from the actor
 		// loop after that request returns, including a pending turn/start.
 		a.reportError(a.interrupt(c))
+	}
+	// Unsubscribe alone retains the thread for an inactivity grace period.
+	// Reap our server before opening another conversation to release it now.
+	a.closeClient()
+}
+
+func (a *agent) closeClient() {
+	a.client.close()
+	a.client = nil
+	for _, c := range a.conversations {
+		if c.titleJob != nil {
+			c.titleJob.cancel()
+			c.titleJob = nil
+		}
+		c.finishProgress(turn{}, time.Now())
 		c.items, c.requests = nil, nil
-		c.loaded = false
+		c.files = nil
+		c.loaded, c.busy, c.exitRequested = false, false, false
+		c.turnID = ""
 	}
 }
 
@@ -471,6 +500,9 @@ func (a *agent) handleCommand(cmd command) error {
 				return a.loadHistory(c)
 			}
 		default:
+			if c != nil && c.handleChangesClick(e.Event.Ref) {
+				return nil
+			}
 			if id, ok := strings.CutPrefix(e.Event.Ref, "rename/"); ok {
 				return a.openRename(id)
 			}
@@ -512,6 +544,11 @@ func (a *agent) handleCommand(cmd command) error {
 }
 
 func (a *agent) startThread() (*conversation, error) {
+	a.selectConversation(nil)
+	a.exitConversations()
+	if err := a.connect(); err != nil {
+		return nil, err
+	}
 	p := a.permission()
 	params := struct {
 		Cwd     string `json:"cwd"`
@@ -532,7 +569,11 @@ func (a *agent) startThread() (*conversation, error) {
 	a.conversations[c.ID] = c
 	a.history.include(c.thread)
 	a.showHistory = true
-	a.selectConversation(c)
+	if a.exitsPending {
+		c.exitRequested = true
+	} else {
+		a.selectConversation(c)
+	}
 	return c, nil
 }
 
@@ -586,13 +627,14 @@ func (a *agent) send() error {
 	if c.busy {
 		return fmt.Errorf("当前会话仍有任务在运行，请等待完成或点击停止")
 	}
-	if !a.workspaceOpen {
+	if !a.workspaceOpen || c.exitRequested {
 		a.selected = nil
 		return nil
 	}
 	// Show the stop action before waiting for turn/start to acknowledge the task.
 	c.busy, c.dirty = true, true
 	c.progress = &turnProgress{started: time.Now()}
+	c.files = newTurnFiles("", c.context.ProjectPath)
 	c.status = ""
 	a.flush()
 	p := a.permission()
@@ -653,12 +695,13 @@ func (a *agent) listHistory(cursor string) error {
 		return err
 	}
 	page, err := call[threadPage](a.client, "thread/list", struct {
-		Cwd         string    `json:"cwd"`
-		Limit       int       `json:"limit"`
-		SortKey     string    `json:"sortKey"`
-		Cursor      string    `json:"cursor,omitempty"`
-		SourceKinds [3]string `json:"sourceKinds"`
-	}{a.context.ProjectPath, 20, "updated_at", cursor, [3]string{"cli", "vscode", "appServer"}})
+		Cwd            string    `json:"cwd"`
+		Limit          int       `json:"limit"`
+		SortKey        string    `json:"sortKey"`
+		Cursor         string    `json:"cursor,omitempty"`
+		SourceKinds    [3]string `json:"sourceKinds"`
+		UseStateDBOnly bool      `json:"useStateDbOnly"`
+	}{a.context.ProjectPath, 20, "updated_at", cursor, [3]string{"cli", "vscode", "appServer"}, true})
 	if err != nil {
 		return err
 	}
@@ -679,10 +722,19 @@ func (a *agent) listHistory(cursor string) error {
 }
 
 func (a *agent) resume(id string) error {
+	if a.selected != nil && a.selected.ID != id {
+		a.selectConversation(nil)
+	}
+	c := a.conversations[id]
+	if c != nil {
+		if err := a.setContext(c.context); err != nil {
+			return err
+		}
+	}
+	a.exitConversations()
 	if err := a.connect(); err != nil {
 		return err
 	}
-	c := a.conversations[id]
 	if c == nil || !c.loaded {
 		p := a.permission()
 		result, err := call[struct {
@@ -702,16 +754,22 @@ func (a *agent) resume(id string) error {
 		}
 		c.thread = result.Thread
 		c.loaded = true
+		if a.exitsPending {
+			c.exitRequested = true
+			return nil
+		}
 		c.items = nil
 		c.progress = nil
+		c.files = nil
 		c.cursor = ""
 		if err = a.loadHistory(c); err != nil {
-			c.loaded = false
+			a.closeClient()
 			return err
 		}
 	}
-	if err := a.setContext(c.context); err != nil {
-		return err
+	if a.exitsPending {
+		c.exitRequested = true
+		return nil
 	}
 	a.history.include(c.thread)
 	a.showHistory = true
@@ -751,6 +809,11 @@ func (a *agent) loadHistory(c *conversation) error {
 	var older []*chatItem
 	slices.Reverse(page.Data)
 	for _, t := range page.Data {
+		files := c.turnFiles(t.ID)
+		if files == nil {
+			files = newTurnFiles(t.ID, c.context.ProjectPath)
+		}
+		collect := !files.complete && t.Status != "inProgress"
 		var progress *turnProgress
 		if c.progress != nil && c.progress.id == t.ID {
 			progress = c.progress
@@ -763,17 +826,23 @@ func (a *agent) loadHistory(c *conversation) error {
 			c.turnID = t.ID
 			c.startProgress(t, time.Now())
 			progress = c.progress
+			c.files = files
 		}
 		for _, item := range t.Items {
+			if collect {
+				files.add(item)
+			}
 			if !slices.ContainsFunc(c.items, func(i *chatItem) bool { return i.data.ID == item.ID }) {
 				i := newChatItem(item, t.Status != "inProgress")
 				i.progress = progress
+				i.files = files
 				if progress != nil && i.modelText() {
 					progress.received = true
 				}
 				older = append(older, i)
 			}
 		}
+		files.complete = files.complete || collect
 	}
 	c.items = append(older, c.items...)
 	c.cursor = page.NextCursor
@@ -830,6 +899,7 @@ func (c *conversation) item(id string) *chatItem {
 	}
 	i := newChatItem(threadItem{ID: id, Type: "agentMessage"}, false)
 	i.progress = c.progress
+	i.files = c.files
 	c.items = append(c.items, i)
 	return i
 }
@@ -903,8 +973,22 @@ func (a *agent) onMessage(message envelope) {
 		c.status = ""
 		c.turnID = event.Turn.ID
 		c.startProgress(event.Turn, time.Now())
+		if c.files == nil || c.files.id != "" && c.files.id != event.Turn.ID {
+			c.files = newTurnFiles(event.Turn.ID, c.context.ProjectPath)
+		} else {
+			c.files.id = event.Turn.ID
+			c.files.ref = "changes/" + event.Turn.ID
+		}
 	case "turn/completed":
 		c.finishProgress(event.Turn, time.Now())
+		if c.files != nil && !c.files.complete {
+			for _, i := range c.items {
+				if i.files == c.files {
+					c.files.add(i.data)
+				}
+			}
+			c.files.complete = true
+		}
 		c.turnRevision++
 		c.busy = false
 		c.turnID = ""
@@ -917,6 +1001,7 @@ func (a *agent) onMessage(message envelope) {
 		}
 		if !a.workspaceOpen || a.selected != c {
 			c.items = nil
+			c.files = nil
 			c.loaded = false
 		}
 	case "serverRequest/resolved":

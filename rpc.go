@@ -56,6 +56,10 @@ func startClient(parent context.Context, root, path string, handle func(envelope
 		cancel()
 		return nil, err
 	}
+	// EOF lets app-server shut down its threads and release their locks. Bound
+	// the grace period so an unresponsive server cannot block extension exit.
+	cmd.Cancel = func() error { _ = stdin.Close(); return nil }
+	cmd.WaitDelay = time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -75,17 +79,19 @@ func startClient(parent context.Context, root, path string, handle func(envelope
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64<<10), 8<<20)
 		for scanner.Scan() {
+			if ctx.Err() != nil {
+				continue
+			}
 			var message envelope
 			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
 				c.err = fmt.Errorf("解析 Codex 消息: %w", err)
 				cancel()
-				break
+				continue
 			}
 			select {
 			case c.messages <- message:
 			case <-ctx.Done():
-				_ = cmd.Wait()
-				return
+				// Drain stdout until shutdown finishes, even if the actor stopped.
 			}
 		}
 		if err := scanner.Err(); err != nil {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -196,8 +195,10 @@ func TestProjectSettingsSurviveRestart(t *testing.T) {
 }
 
 func TestProjectSettingsFollowWorkspaceAndConversationSelection(t *testing.T) {
+	fixtureExecutable(t)
 	first, second, fresh := t.TempDir(), t.TempDir(), t.TempDir()
-	a := &agent{}
+	a := &agent{ctx: t.Context()}
+	t.Cleanup(a.closeClient)
 	for _, setting := range []struct {
 		root, model string
 		permission  int
@@ -221,9 +222,7 @@ func TestProjectSettingsFollowWorkspaceAndConversationSelection(t *testing.T) {
 	firstChat := &conversation{thread: thread{ID: "first"}, context: peb.ActionContext{ProjectPath: first}}
 	secondChat := &conversation{thread: thread{ID: "second"}, context: peb.ActionContext{ProjectPath: second}}
 	a.conversations = map[string]*conversation{firstChat.ID: firstChat, secondChat.ID: secondChat}
-	a.client = &rpcClient{ctx: context.Background()}
 	for _, want := range []*conversation{firstChat, secondChat, firstChat} {
-		want.loaded = true
 		if err := a.resume(want.ID); err != nil {
 			t.Fatal(err)
 		}

@@ -156,11 +156,15 @@ func fixtureServer() {
 		case "thread/list":
 			fixtureWait("PENCODE_CODEX_HISTORY_GATE")
 			var p struct {
-				Cursor      string   `json:"cursor"`
-				Cwd         string   `json:"cwd"`
-				SourceKinds []string `json:"sourceKinds"`
+				Cursor         string   `json:"cursor"`
+				Cwd            string   `json:"cwd"`
+				SourceKinds    []string `json:"sourceKinds"`
+				UseStateDBOnly bool     `json:"useStateDbOnly"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
+			if !p.UseStateDBOnly {
+				fixtureWait("PENCODE_CODEX_HISTORY_SCAN_GATE")
+			}
 			if !filepath.IsAbs(p.Cwd) || !slices.Equal(p.SourceKinds, []string{"cli", "vscode", "appServer"}) {
 				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32602, "message": "history must specify project and interactive sources"}})
 				continue
@@ -202,6 +206,15 @@ func fixtureServer() {
 				}
 			}
 			stored := map[string]any{"id": "old-turn", "status": "completed", "items": []map[string]string{{"id": itemID, "type": "agentMessage", "text": text}}}
+			if mode := os.Getenv("PENCODE_CODEX_TURN_CHANGES"); mode != "" {
+				stored["items"] = []threadItem{
+					{ID: "stored-edit", Type: "fileChange", Status: "completed", Changes: []change{{Path: "saved.go", Diff: "+stored\n"}}},
+					{ID: itemID, Type: "agentMessage", Text: text},
+				}
+				if mode == "running" {
+					stored["status"] = "inProgress"
+				}
+			}
 			if os.Getenv("PENCODE_CODEX_TURN_DURATION") == "1" {
 				stored["durationMs"] = 112000
 			} else if os.Getenv("PENCODE_CODEX_TURN_DURATION") == "started-only" {
@@ -272,6 +285,12 @@ func fixtureServer() {
 			notify("turn/completed", map[string]any{"threadId": active, "turn": map[string]string{"id": "turn1", "status": "interrupted"}})
 		default:
 			send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32601, "message": "unsupported fixture method"}})
+		}
+	}
+	fixtureWait("PENCODE_CODEX_SHUTDOWN_GATE")
+	if os.Getenv("PENCODE_CODEX_SHUTDOWN_OUTPUT") == "1" {
+		for range 256 {
+			notify("thread/closed", strings.Repeat("x", 4096))
 		}
 	}
 }
@@ -924,6 +943,9 @@ func TestLiveAppServer(t *testing.T) {
 		}
 	}
 	a.pendingModel = ""
+	if err := a.listHistory(""); err != nil {
+		t.Fatal("state database thread/list unavailable", err)
+	}
 	root := t.TempDir()
 	started, err := call[struct {
 		Thread thread `json:"thread"`
@@ -931,5 +953,5 @@ func TestLiveAppServer(t *testing.T) {
 	if err != nil || started.Thread.ID == "" {
 		t.Fatal("ephemeral thread/start unavailable", err)
 	}
-	t.Log("real app-server handshake, model/list and ephemeral thread/start succeeded; no turn submitted")
+	t.Log("real app-server handshake, model/list, thread/list and ephemeral thread/start succeeded; no turn submitted")
 }
