@@ -1,7 +1,7 @@
 .codex-workspace { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--vscode-editor-foreground); }
 .codex-chat-pane { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .codex-transcript { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
-.codex-transcript, .codex-sidebar, .codex-history-list, .codex-activity-list, .codex-changes-list, .codex-chat pre, .codex-composer textarea { scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+.codex-transcript, .codex-sidebar, .codex-completion-list, .codex-history-list, .codex-activity-list, .codex-changes-list, .codex-chat pre, .codex-composer textarea { scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
 .codex-sidebar { display: flex; flex-direction: column; flex: 0 0 auto; width: 28%; min-width: 240px; max-width: 340px; min-height: 0; padding: 16px; overflow: auto; border-left: 1px solid var(--vscode-editorGroup-border); background: var(--vscode-sideBar-background); }
 .codex-chat-pane > .codex-composer { flex: 0 0 auto; padding: 12px 8px 16px; }
 .codex-chat, .codex-composer { color: var(--vscode-editor-foreground); font-size: 13px; line-height: 1.6; }
@@ -12,7 +12,19 @@
 .codex-chat button:focus-visible, .codex-composer button:focus-visible, .codex-composer textarea:focus, .codex-chat input:focus, .codex-composer input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 .codex-chat input, .codex-composer input { color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 8px; padding: 8px; }
 .codex-composer input { width: 180px; padding: 4px 8px; }
-.codex-composer { min-width: 0; }
+.codex-composer { position: relative; min-width: 0; }
+.codex-completion { position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 10; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 12px; background: var(--vscode-editorWidget-background); }
+.codex-completion-list { max-height: 280px; overflow: auto; }
+.codex-completion-heading { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px 6px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.codex-completion-heading > span:last-child { text-align: right; }
+.codex-composer .codex-completion-item { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 5px 8px; border-radius: 6px; color: var(--vscode-editor-foreground); background: transparent; text-align: left; }
+.codex-composer .codex-completion-item:hover { background: var(--vscode-list-hoverBackground); }
+.codex-composer .codex-completion-item[aria-selected="true"] { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
+.codex-completion-icon { flex-shrink: 0; width: 14px; height: 14px; }
+.codex-completion-label { flex-shrink: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.codex-completion-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.codex-completion-item[aria-selected="true"] .codex-completion-detail { color: var(--vscode-list-activeSelectionForeground); }
+.codex-completion > div > .codex-muted { margin: 6px 8px; }
 .codex-input-card { width: 100%; min-width: 0; margin: 0; padding: 12px 8px 8px 12px; border: 1px solid var(--vscode-input-border); border-radius: 22px; background: var(--vscode-input-background); }
 .codex-input-card:focus-within { border-color: var(--vscode-focusBorder); }
 .codex-composer .codex-prompt { display: block; width: 100%; height: 38px; min-height: 38px; max-height: 240px; overflow-y: auto; margin: 0; padding: 0; border: 0; border-radius: 8px; outline: none; resize: none; color: var(--vscode-input-foreground); placeholder-color: var(--vscode-input-placeholderForeground); background: transparent; font-family: ui; font-size: 14px; line-height: 1.5; }
@@ -41,6 +53,12 @@
 .codex-composer .codex-attachment { display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 3px 8px; color: var(--vscode-input-foreground); background: var(--vscode-editorWidget-background); font-size: 12px; }
 .codex-attachment > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .codex-attachment > span:last-child { flex-shrink: 0; color: var(--vscode-descriptionForeground); }
+.codex-skills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.codex-composer .codex-skill { display: flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 4px; border-radius: 4px; color: var(--vscode-textLink-foreground); background: transparent; font-family: ui; font-size: 14px; }
+.codex-composer .codex-skill:hover { background: var(--vscode-toolbar-hoverBackground); }
+.codex-skill img { flex-shrink: 0; width: 14px; height: 14px; }
+.codex-skill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codex-skill .codex-skill-remove { flex-shrink: 0; color: var(--vscode-descriptionForeground); }
 .codex-files { color: var(--vscode-editor-foreground); font-family: ui; font-size: 13px; }
 .codex-file-path { display: flex; gap: 8px; margin-bottom: 12px; }
 .codex-file-path input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--vscode-input-border); border-radius: 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); }
@@ -78,6 +96,7 @@
 .codex-user { align-self: flex-end; max-width: 75%; padding: 10px 16px; border-radius: 18px; background: var(--vscode-editorWidget-background); }
 .codex-message h3, .codex-approval h3, .codex-history h3 { font-size: 12px; margin: 0 0 8px; color: var(--vscode-descriptionForeground); }
 .codex-message p { margin: 12px 0; }
+.codex-chat li > p:first-child { margin-top: 0; }
 .codex-message > :first-child, .codex-activity-details > :first-child { margin-top: 0; }
 .codex-message > :last-child, .codex-activity-details > :last-child { margin-bottom: 0; }
 .codex-activity { margin: 4px 0; color: var(--vscode-descriptionForeground); }
@@ -123,6 +142,17 @@
 .codex-chat table { border-collapse: collapse; width: 100%; }
 .codex-chat td, .codex-chat th { border: 1px solid var(--vscode-editorGroup-border); padding: 6px 10px; }
 .codex-chat a { color: var(--vscode-textLink-foreground); }
+.codex-chat button.codex-link, .codex-directory button.codex-link { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; color: var(--vscode-textLink-foreground); background: transparent; font-family: inherit; font-size: inherit; line-height: inherit; text-align: left; cursor: pointer; text-decoration: none; overflow-wrap: anywhere; }
+.codex-chat button.codex-link { margin: 0 .25em; }
+.codex-chat button.codex-link:hover, .codex-directory button.codex-link:hover { background: transparent; text-decoration: underline; }
+.codex-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; border-radius: 2px; }
+.codex-link-icon { display: block; align-self: center; flex-shrink: 0; width: 14px; height: 14px; }
+.codex-chat .codex-link code { padding: 0; background: transparent; color: inherit; }
+.codex-directory { padding: 16px 24px; color: var(--vscode-editor-foreground); font-family: ui; font-size: 14px; }
+.codex-directory h2 { margin: 0 0 8px; font-size: 18px; }
+.codex-directory nav { display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }
+.codex-directory nav button.codex-link { display: flex; padding: 6px 8px; border-radius: 4px; }
+.codex-directory nav button.codex-link:hover { background: var(--vscode-list-hoverBackground); }
 .codex-approval { padding: 16px; margin: 16px 0; border: 1px solid var(--vscode-focusBorder); border-radius: 6px; background: var(--vscode-editorWidget-background); }
 .codex-approval button { margin: 8px 8px 0 0; }
 .codex-approval input { display: block; width: 100%; }

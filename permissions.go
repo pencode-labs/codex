@@ -59,6 +59,7 @@ func (a *agent) closePermissions() error {
 }
 
 func (a *agent) closeComposerMenus() error {
+	a.dismissCompletion()
 	if err := a.closeModels(); err != nil {
 		return err
 	}

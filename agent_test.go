@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,26 @@ func fixtureServer() {
 			response(map[string]string{"userAgent": "fixture"})
 		case "config/read":
 			response(map[string]any{"config": map[string]any{"mcp_servers": map[string]any{"fixture": map[string]bool{"enabled": true}}}})
+		case "skills/list":
+			var p struct {
+				Cwds []string `json:"cwds"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			if len(p.Cwds) != 1 || !filepath.IsAbs(p.Cwds[0]) {
+				os.Exit(12)
+			}
+			if os.Getenv("PENCODE_CODEX_SKILLS_ERROR") == "1" {
+				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "skill catalog failed"}})
+				continue
+			}
+			response(map[string]any{"data": []map[string]any{
+				{"cwd": "other-project", "skills": []map[string]any{{"name": "wrong-project", "path": "/other/SKILL.md", "enabled": true}}},
+				{"cwd": p.Cwds[0], "skills": []map[string]any{
+					{"name": "fixture-review", "description": "Review project changes", "path": filepath.Join(p.Cwds[0], "skills", "fixture-review", "SKILL.md"), "enabled": true, "interface": map[string]string{"displayName": "Fixture Review", "shortDescription": "审查代码"}},
+					{"name": "fixture-test", "description": "Write project tests", "path": filepath.Join(p.Cwds[0], "skills", "fixture-test", "SKILL.md"), "enabled": true},
+					{"name": "disabled", "description": "Disabled", "path": filepath.Join(p.Cwds[0], "skills", "disabled", "SKILL.md"), "enabled": false},
+				}, "errors": []any{}},
+			}})
 		case "model/list":
 			modelPages++
 			var p struct {
@@ -180,12 +201,18 @@ func fixtureServer() {
 			} else {
 				response(threadPage{Data: []thread{{ID: "saved", Name: "Saved task"}}})
 			}
-		case "thread/resume":
+		case "thread/resume", "thread/read":
 			var p struct {
 				ThreadID string `json:"threadId"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			threadPermissions[p.ThreadID] = preset + permissions.Sandbox
+			if msg.Method == "thread/resume" {
+				if _, err := os.Stat(os.Getenv("PENCODE_CODEX_WRITER_LOCK")); err == nil {
+					send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32600, "message": "thread " + p.ThreadID + " already has an active writer"}})
+					continue
+				}
+				threadPermissions[p.ThreadID] = preset + permissions.Sandbox
+			}
 			name := names[p.ThreadID]
 			if name == "" {
 				name = "Saved task"
@@ -254,12 +281,24 @@ func fixtureServer() {
 				notify("turn/completed", map[string]any{"threadId": p.ThreadID, "turn": map[string]string{"id": "title-turn", "status": status}})
 				continue
 			}
+			if os.Getenv("PENCODE_CODEX_REQUIRE_SKILL") == "1" {
+				if len(p.Input) != 2 || p.Input[1].Type != "skill" || p.Input[1].Name != "fixture-review" || !filepath.IsAbs(p.Input[1].Path) || !strings.Contains(p.Input[0].Text, "[$fixture-review](") {
+					os.Exit(13)
+				}
+			}
 			if len(p.Input) > 0 && p.Input[0].Text == "implement feature" && (p.Model != "fixture-luna" || p.Effort != "high") {
 				os.Exit(5)
 			}
 			active = p.ThreadID
 			notify("item/completed", map[string]any{"threadId": active, "item": map[string]string{"id": "permissions", "type": "agentMessage", "text": "Thread permissions: " + threadPermissions[active] + "; Turn permissions: " + preset + permissions.SandboxPolicy.Type + fmt.Sprintf("; network=%t; Effort: %s", permissions.SandboxPolicy.NetworkAccess, p.Effort)}})
-			if len(p.Input) > 0 && (p.Input[0].Text == "fail" || strings.HasPrefix(p.Input[0].Text, "fail\n\n附加文件")) {
+			text := ""
+			if len(p.Input) > 0 {
+				text = p.Input[0].Text
+				for strings.HasPrefix(text, "[$") {
+					_, text, _ = strings.Cut(text, "\n")
+				}
+			}
+			if text == "fail" || strings.HasPrefix(text, "fail\n\n附加文件") {
 				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "fixture failure"}})
 				continue
 			}
@@ -372,17 +411,24 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	ctx := peb.ActionContext{ID: "chat", ProjectPath: t.TempDir()}
 	id := uint32(1)
 	action := func() { id++; data, _ := peb.EncodeActionContext(nil, ctx); write(peb.ActionInvoke, id, data) }
+	scope, nextTab := "", 1
 	event := func(surface, kind, ref, value string) {
 		id++
-		data, err := peb.EncodeUIEvent(nil, peb.UIEvent{ID: surface, Context: ctx, Event: peb.EditorEvent{Kind: kind, Ref: ref, Value: value}})
+		caret := uint32(utf8.RuneCountInString(value))
+		data, err := peb.EncodeUIEvent(nil, peb.UIEvent{ID: scope + surface, Context: ctx, Event: peb.EditorEvent{Kind: kind, Ref: ref, Value: value, Anchor: caret, Focus: caret}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		write(peb.UIRequest, id, data)
+		if surface == "composer" && kind == "click" && ref == "new" {
+			scope = strconv.Itoa(nextTab) + "/"
+			nextTab++
+		}
 	}
 	var views peb.ViewReceiver
 	waitUI := func(surface, contains string) peb.UI {
 		t.Helper()
+		surface = scope + surface
 		deadline := time.After(10 * time.Second)
 		for {
 			select {
@@ -405,7 +451,13 @@ func TestAgentPEBWorkflow(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if ui.Kind == peb.Panel || ui.ID != "composer" && ui.ID != "models" && ui.ID != "permissions" && ui.ID != "files" && ui.ID != "rename" && ui.ID != "error" {
+				local := ui.ID
+				if prefix, rest, ok := strings.Cut(local, "/"); ok {
+					if _, err := strconv.Atoi(prefix); err == nil {
+						local = rest
+					}
+				}
+				if ui.Kind == peb.Panel || local != "composer" && local != "models" && local != "permissions" && local != "files" && local != "rename" && local != "error" {
 					t.Fatal("chat opened an extra surface", ui)
 				}
 				if ui.View != nil {
@@ -553,7 +605,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		t.Fatal("missing conversation tab", ui)
 	} else if !strings.Contains(ui.View.HTML, "Thread permissions: on-request/user/workspace-write; Turn permissions: on-request/user/workspaceWrite; network=false; Effort: high") {
 		t.Fatal("default permissions were not sent", ui.View.HTML)
-	} else if !strings.Contains(ui.View.HTML, html.EscapeString(attachmentPrompt("implement feature", []string{attachment}))) || strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
+	} else if !strings.Contains(ui.View.HTML, "implement feature") || !strings.Contains(ui.View.HTML, html.EscapeString(attachment)) || strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
 		t.Fatal("attachment was not sent or not cleared after success", ui.View.HTML)
 	}
 	event("composer", "click", "accept/100", "")
@@ -614,7 +666,23 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	}
 	event("models", "click", "effort/low", "")
 	waitUI("composer", `codex-model-effort">低</span>`)
+	event("composer", "input", "prompt", "original tab draft")
+	addFile(attachment)
+	originalScope := scope
 	event("composer", "click", "new", "")
+	newScope := scope
+	if fresh := waitUI("composer", "新会话"); fresh.ID == originalScope+"composer" || strings.Contains(fresh.View.HTML, "original tab draft") || strings.Contains(fresh.View.HTML, `data-ref="remove-file/0"`) {
+		t.Fatal("new session replaced the old tab or inherited its draft", fresh)
+	}
+	scope = originalScope
+	event("composer", "visibilitychange", "", "visible")
+	action()
+	if previous := waitUI("composer", "original tab draft"); !strings.Contains(previous.View.HTML, "Final reply") || !strings.Contains(previous.View.HTML, `data-ref="remove-file/0"`) {
+		t.Fatal("opening a new tab lost the original transcript or attachments", previous)
+	}
+	scope = newScope
+	event("composer", "visibilitychange", "", "visible")
+	action()
 	waitUI("composer", "新会话")
 	event("composer", "input", "prompt", "wait")
 	event("composer", "click", "model-settings", "")
@@ -640,7 +708,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	action()
 	waitUI("composer", "给 Codex 的任务")
 	event("composer", "click", "history", "")
-	waitUI("composer", "历史标题")
+	waitUI("composer", "Saved task")
 	event("composer", "click", "history/saved", "")
 	waitUI("composer", "Stored conversation")
 	// Closing exits the conversation even while history is slow; it remains
@@ -676,10 +744,14 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		t.Fatal("completed refresh retained the loading indicator", ui)
 	}
 	// A failed turn must preserve the user's input instead of silently losing it.
+	event("composer", "input", "prompt", "/fixture-r")
+	waitUI("composer", ">fixture-review</span>")
+	event("composer", "click", "completion/0", "")
+	waitUI("composer", `data-ref="remove-skill/0"`)
 	event("composer", "input", "prompt", "fail")
 	addFile(attachment)
 	event("composer", "click", "send", "")
-	if notice := waitUI("error", "fixture failure"); notice.Kind != peb.Notification || notice.Context.ProjectPath != ctx.ProjectPath {
+	if notice := waitUI("error", "fixture failure"); notice.Kind != peb.Notification || notice.Severity != peb.NotificationError || notice.Context.ProjectPath != ctx.ProjectPath {
 		t.Fatal("failed request did not use an IDE notification", notice)
 	}
 	ui = waitUI("composer", `data-ref="send"`)
@@ -695,6 +767,13 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	}
 	if !strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
 		t.Fatal("failed request lost the attachment")
+	}
+	if !strings.Contains(ui.View.HTML, `data-ref="remove-skill/0"`) || !strings.Contains(ui.View.HTML, ">Fixture Review</span>") || strings.Contains(ui.View.HTML, "[$fixture-review]") {
+		t.Fatal("failed request lost the skill chip or exposed its Markdown", ui.View.HTML)
+	}
+	event("composer", "click", "remove-skill/0", "")
+	if ui := waitUI("composer", ">fail</textarea>"); strings.Contains(ui.View.HTML, `data-ref="remove-skill/0"`) {
+		t.Fatal("skill removal failed", ui.View.HTML)
 	}
 	event("composer", "click", "remove-file/0", "")
 	if ui := waitUI("composer", ">fail</textarea>"); strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
@@ -726,6 +805,34 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if ui := waitUI("permissions", ""); !ui.Close {
 		t.Fatal("hidden composer left permission menu open")
 	}
+	// Creating a tab must preserve another tab's active turn and draft.
+	event("composer", "input", "prompt", "running tab draft")
+	runningScope := scope
+	event("composer", "click", "new", "")
+	idleScope := scope
+	waitUI("composer", "新会话")
+	event("composer", "input", "prompt", "independent draft")
+	event("composer", "click", "permission-settings", "")
+	if menu := waitUI("permissions", "完全访问权限"); menu.Anchor != "ui:"+idleScope+"composer#permission-settings" {
+		t.Fatal("new tab menu is anchored to another tab", menu)
+	}
+	event("composer", "visibilitychange", "", "hidden")
+	waitUI("permissions", "")
+	scope = runningScope
+	event("composer", "visibilitychange", "", "visible")
+	action()
+	if running := waitUI("composer", "running tab draft"); !running.Busy {
+		t.Fatal("new session interrupted the original task", running)
+	}
+	event("composer", "click", "stop", "")
+	waitUI("composer", "任务已停止")
+	event("composer", "close", "", "")
+	scope = idleScope
+	event("composer", "visibilitychange", "", "visible")
+	action()
+	if idle := waitUI("composer", "independent draft"); idle.Busy || strings.Contains(idle.View.HTML, "任务已停止") {
+		t.Fatal("closing another tab changed the new session", idle)
+	}
 	// Menu selections must reach disk and restore without this agent's state.
 	restarted := &agent{}
 	if err := restarted.setContext(ctx); err != nil || restarted.model != "fixture-luna" || restarted.effort != "low" || restarted.permissionIndex != 2 {
@@ -734,8 +841,13 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	// Invoking Codex from a file reveals its existing tab.
 	action()
 	waitUI("composer", "给 Codex 的任务")
-	if ui := waitUI("composer", ""); ui.View != nil || ui.Close {
-		t.Fatal("hidden chat was not revealed", ui)
+	for {
+		if ui := waitUI("composer", ""); ui.View == nil {
+			if ui.Close {
+				t.Fatal("hidden chat was closed instead of revealed", ui)
+			}
+			break
+		}
 	}
 	event("composer", "close", "", "")
 	projectContext := ctx
@@ -749,7 +861,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	ctx = projectContext
 	action()
 	ui = waitUI("composer", "完全访问</span>")
-	if !strings.Contains(ui.View.HTML, "Fixture Luna") {
+	if !strings.Contains(ui.View.HTML, "fixture-luna") && !strings.Contains(ui.View.HTML, "Fixture Luna") {
 		t.Fatal("returning to project did not restore model", ui.View.HTML)
 	}
 	write(peb.Shutdown, 0, nil)
@@ -888,7 +1000,7 @@ func TestHistoryRetainsNewThreadsAndDeduplicatesPages(t *testing.T) {
 
 func TestMarkdownIsEscapedAndDoesNotLoadImages(t *testing.T) {
 	var b strings.Builder
-	renderMarkdown(&b, "**safe**\n\n<script>alert(1)</script>\n\n![secret](https://example.com/secret)\n\nafter image")
+	renderMarkdown(&b, "**safe**\n\n<script>alert(1)</script>\n\n![secret](https://example.com/secret)\n\nafter image", "", "test")
 	if !strings.Contains(b.String(), "<strong>safe</strong>") || strings.Contains(b.String(), "<script>") || strings.Contains(b.String(), "<img") || !strings.Contains(b.String(), "after image") {
 		t.Fatal(b.String())
 	}

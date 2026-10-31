@@ -3,6 +3,6 @@
   "name": "Codex Agent",
   "version": "0.1.0",
   "publisher": "Pencode",
-  "description": "通过 Codex app-server 在编辑器标签页中聊天、编程和恢复会话。",
+  "description": "在编辑器中与 Codex 对话，阅读代码、修改文件并执行命令。支持流式回复、文件变更对比、历史会话恢复，以及模型、推理强度和操作权限设置。",
   "entry": "bin/codex-agent"
 }

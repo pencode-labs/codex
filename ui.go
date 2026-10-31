@@ -14,6 +14,7 @@ import (
 	"github.com/yuin/goldmark/v2/ast"
 	"github.com/yuin/goldmark/v2/extension"
 	"github.com/yuin/goldmark/v2/parser"
+	"github.com/yuin/goldmark/v2/renderer"
 	markdownhtml "github.com/yuin/goldmark/v2/renderer/html"
 )
 
@@ -21,7 +22,9 @@ import (
 var chatCSS string
 
 var chatParser = parser.New(parser.WithExtensions(extension.TableParser, extension.NewLinkifyParser()))
-var chatRenderer = markdownhtml.New(markdownhtml.WithExtensions(extension.TableHTMLRenderer))
+var chatRenderer = markdownhtml.New(markdownhtml.WithExtensions(extension.TableHTMLRenderer), markdownhtml.WithNodeRendererDecorators(map[ast.NodeKind]markdownhtml.NodeRendererDecorator{
+	ast.KindLink: chatLinkDecorator, ast.KindAutoLink: chatLinkDecorator,
+}))
 
 func (a *agent) flush() {
 	if !a.dirty() {
@@ -75,7 +78,8 @@ func (a *agent) composerView() *peb.EditorView {
 	if a.selected != nil {
 		draft, title, busy = a.selected.draft, a.selected.title(), a.selected.busy
 	}
-	b.WriteString(`<section class="codex-composer"><form data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
+	b.WriteString(`<section class="codex-composer">`)
+	b.WriteString(`<form id="pencode-extension-codex-form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`">`)
 	files := a.attachments[a.attachmentScope()]
@@ -96,7 +100,40 @@ func (a *agent) composerView() *peb.EditorView {
 		}
 		b.WriteString(`</div>`)
 	}
-	b.WriteString(`<textarea data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form" class="codex-prompt" aria-label="给 Codex 的任务" placeholder="和 Codex 一起工作" rows="2">`)
+	if skills := a.skills[a.attachmentScope()]; len(skills) > 0 {
+		b.WriteString(`<div class="codex-skills" aria-label="已选技能">`)
+		for index, skill := range skills {
+			ref := "remove-skill/" + strconv.Itoa(index)
+			b.WriteString(`<button class="codex-skill" type="button" data-ref="`)
+			b.WriteString(ref)
+			b.WriteString(`" title="`)
+			b.WriteString(html.EscapeString(skill.path))
+			b.WriteString(`" aria-label="移除技能 `)
+			b.WriteString(html.EscapeString(skill.label))
+			b.WriteString(`"><img src="resources/icons/layers-2.svg" alt="" aria-hidden="true"><span>`)
+			b.WriteString(html.EscapeString(skill.label))
+			b.WriteString(`</span><span class="codex-skill-remove" aria-hidden="true">×</span></button>`)
+			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`<textarea id="pencode-extension-codex-prompt" data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form"`)
+	if a.completion.kind != 0 {
+		b.WriteString(` data-pencode-completion="true" aria-expanded="true" aria-controls="pencode-extension-codex-completion-list" aria-autocomplete="list"`)
+		if a.completion.count != 0 {
+			b.WriteString(` aria-activedescendant="pencode-extension-codex-completion-option-`)
+			b.WriteString(strconv.Itoa(a.completion.selected))
+			b.WriteByte('"')
+		}
+	}
+	if a.completion.revision != 0 {
+		b.WriteString(` data-pencode-caret="`)
+		b.WriteString(strconv.Itoa(a.completion.caret))
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatUint(a.completion.revision, 10))
+		b.WriteByte('"')
+	}
+	b.WriteString(` class="codex-prompt" aria-label="给 Codex 的任务" placeholder="和 Codex 一起工作，/ 选择技能，@ 引用文件" rows="2">`)
 	b.WriteString(html.EscapeString(draft))
 	b.WriteString(`</textarea><div class="codex-input-footer"><button data-ref="add-file" class="codex-icon-button" type="button" title="添加文件" aria-label="添加文件" aria-haspopup="dialog"><img src="resources/icons/plus.svg" alt=""></button><button data-ref="permission-settings" class="codex-access`)
 	if p.sandbox == "danger-full-access" {
@@ -131,6 +168,7 @@ func (a *agent) composerView() *peb.EditorView {
 		b.WriteString(`<button data-ref="send" class="codex-icon-button codex-send" type="button" title="发送" aria-label="发送"><img src="resources/icons/arrow-up.svg" alt=""></button>`)
 	}
 	b.WriteString(`</div></form>`)
+	bindings = a.renderCompletion(&b, bindings)
 	bindings = append(bindings, peb.EditorBinding{Ref: "prompt", Kind: "input"}, peb.EditorBinding{Ref: "form", Kind: "submit"}, peb.EditorBinding{Ref: "add-file", Kind: "click"}, peb.EditorBinding{Ref: "permission-settings", Kind: "click"}, peb.EditorBinding{Ref: "model-settings", Kind: "click"})
 	status := a.status
 	if a.selected != nil && a.selected.status != "" {
@@ -231,11 +269,12 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 		}
 		if i.html == "" {
 			var fragment strings.Builder
-			i.render(&fragment)
+			i.render(&fragment, c.context.ProjectPath, fmt.Sprintf("%p", i))
 			i.html = fragment.String()
 			if len(i.html) > 512<<10 {
 				i.html = `<p class="codex-muted">此条输出过长，请在 Codex 历史中查看完整内容。</p>`
 				i.detailRef = ""
+				i.linkBindings = nil
 			}
 		}
 		if size+len(i.html) > 1200<<10 {
@@ -281,6 +320,7 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 			continue
 		}
 		b.WriteString(i.html)
+		bindings = append(bindings, i.linkBindings...)
 		if i.data.Type == "userMessage" && i.progress != nil && i.progress != progress {
 			i.progress.render(b)
 			progress = i.progress
@@ -301,7 +341,8 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 	return bindings
 }
 
-func (i *chatItem) render(b *strings.Builder) {
+func (i *chatItem) render(b *strings.Builder, root, scope string) {
+	i.linkBindings = nil
 	label, icon := "", "wrench"
 	class := "codex-message"
 	switch i.data.Type {
@@ -313,7 +354,7 @@ func (i *chatItem) render(b *strings.Builder) {
 	case "plan":
 		label = "计划"
 	case "reasoning":
-		label = "思考摘要"
+		label = i.reasoningLabel()
 	case "commandExecution":
 		label, icon = "运行了命令", "terminal"
 	case "fileChange":
@@ -380,8 +421,8 @@ func (i *chatItem) render(b *strings.Builder) {
 		b.WriteString(`<div class="codex-activity-details">`)
 	}
 	if i.text.Len() > 0 {
-		if i.complete && (i.data.Type == "agentMessage" || i.data.Type == "plan") {
-			renderMarkdown(b, i.text.String())
+		if i.complete && (i.data.Type == "userMessage" || i.data.Type == "agentMessage" || i.data.Type == "plan") {
+			i.linkBindings = renderMarkdown(b, i.text.String(), root, scope)
 		} else {
 			b.WriteString(`<div class="codex-text">`)
 			b.WriteString(html.EscapeString(i.text.String()))
@@ -412,7 +453,7 @@ func pre(b *strings.Builder, text string) {
 	b.WriteString(`</code></pre>`)
 }
 
-func renderMarkdown(b *strings.Builder, source string) {
+func renderMarkdown(b *strings.Builder, source, root, scope string) []peb.EditorBinding {
 	document := chatParser.ParseStringSource(source)
 	// Chat text must not initiate resource loads or leak the task in image URLs.
 	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -422,9 +463,13 @@ func renderMarkdown(b *strings.Builder, source string) {
 		}
 		return ast.WalkContinue, nil
 	})
-	if err := chatRenderer.RenderStringSource(b, source, document); err != nil {
+	links := chatLinkState{root: root, scope: scope}
+	context := renderer.NewContext()
+	context.Set(chatLinkContext, &links)
+	if err := chatRenderer.RenderStringSource(b, source, document, renderer.WithContext(context)); err != nil {
 		pre(b, source)
 	}
+	return links.bindings
 }
 
 func (r *approval) render(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {

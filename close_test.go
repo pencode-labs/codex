@@ -105,7 +105,7 @@ func fixtureExecutable(t *testing.T) string {
 
 func TestLeavingConversationReleasesServer(t *testing.T) {
 	fixtureExecutable(t)
-	for _, ref := range []string{"history/other", "new", "projectchange", "close"} {
+	for _, ref := range []string{"history/other", "projectchange", "close"} {
 		t.Run(ref, func(t *testing.T) {
 			root := t.TempDir()
 			a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: root}, conversations: make(map[string]*conversation), workspaceOpen: true}

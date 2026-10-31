@@ -1,0 +1,77 @@
+name: Release extension
+
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extension-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+  CGO_ENABLED: '0'
+  GOWORK: 'off'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test -mod=readonly ./...
+      - name: Build extension archives
+        shell: python3 {0}
+        run: |
+          import hashlib
+          import itertools
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+
+          tag = os.environ['RELEASE_TAG']
+          manifest = json.loads(Path('resources/extension.json').read_text())
+          checksums = []
+          for goos, goarch in itertools.product(('linux', 'darwin', 'windows'), ('amd64', 'arm64')):
+              package = Path('dist') / f"{manifest['id']}-{tag}-{goos}-{goarch}"
+              shutil.copytree('resources', package / 'resources')
+              for name in ('LICENSE', 'README.md'):
+                  shutil.copy2(name, package / name)
+              entry = manifest['entry'].removesuffix('.exe')
+              if goos == 'windows':
+                  entry += '.exe'
+              packaged_manifest = manifest | {'entry': entry, 'version': tag.removeprefix('v')}
+              (package / 'resources/extension.json').write_text(
+                  json.dumps(packaged_manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+              subprocess.run(
+                  ['go', 'build', '-mod=readonly', '-trimpath', '-ldflags=-s -w', '-o', str(package / entry), '.'],
+                  env=os.environ | {'GOOS': goos, 'GOARCH': goarch}, check=True)
+              archive = Path(shutil.make_archive(str(package), 'zip', package))
+              with archive.open('rb') as stream:
+                  checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
+              checksums.append(f'{checksum}  {archive.name}\n')
+          Path('dist/SHA256SUMS').write_text(''.join(checksums), encoding='utf-8')
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS --clobber
+          else
+            flags=(--verify-tag --generate-notes)
+            if [[ "${RELEASE_TAG#v}" == *-* ]]; then
+              flags+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS "${flags[@]}"
+          fi

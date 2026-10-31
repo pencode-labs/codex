@@ -62,6 +62,7 @@ func (a *agent) setContext(ctx peb.ActionContext) error {
 	if err := a.closeComposerMenus(); err != nil {
 		return err
 	}
+	a.completion = composerCompletion{}
 	a.context = ctx
 	a.history, a.showHistory = threadPage{}, false
 	a.status, a.model, a.effort, a.permissionIndex = "", "", "", 0

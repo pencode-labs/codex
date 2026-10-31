@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -77,6 +78,42 @@ func TestActivityGroupsRespectMessagesAndKeepApprovalsVisible(t *testing.T) {
 	validateBindings(t, view)
 	if strings.Count(view.HTML, `class="codex-activity-group"`) != 3 || !strings.Contains(view.HTML, "Checking files") || !strings.Contains(view.HTML, "Continue") || !strings.Contains(view.HTML, `data-ref="accept/1"`) {
 		t.Fatal("messages should separate groups and approvals must remain visible", view.HTML)
+	}
+}
+
+func TestReasoningGroupPreviewsFirstSummaryLine(t *testing.T) {
+	i := newChatItem(threadItem{ID: "thinking", Type: "reasoning", Summary: []string{"\n**检查 <入口>**\r\n后续分析", "另一条摘要"}}, true)
+	a := &agent{selected: &conversation{items: []*chatItem{i}}}
+	for _, expanded := range []bool{false, true} {
+		i.groupExpanded = expanded
+		view := a.composerView()
+		validateBindings(t, view)
+		want := 1
+		if expanded {
+			want = 3 // Group, item label and accessible item name.
+		}
+		if strings.Count(view.HTML, "检查 &lt;入口&gt;") != want || strings.Contains(view.HTML, "思考摘要") || strings.Contains(view.HTML, "后续分析") || strings.Contains(view.HTML, "另一条摘要") {
+			t.Fatal("reasoning titles should preview only the escaped first line", view.HTML)
+		}
+	}
+	clickActivity(t, a, i.detailRef)
+	view := a.composerView()
+	if !strings.Contains(view.HTML, "后续分析") || !strings.Contains(view.HTML, "另一条摘要") {
+		t.Fatal("expanding reasoning should retain its complete summary", view.HTML)
+	}
+}
+
+func TestReasoningGroupTitleUpdatesWithStream(t *testing.T) {
+	i := newChatItem(threadItem{ID: "thinking", Type: "reasoning"}, false)
+	c := &conversation{thread: thread{ID: "thread"}, items: []*chatItem{i}}
+	a := &agent{selected: c, conversations: map[string]*conversation{"thread": c}}
+	_ = a.composerView()
+	for _, delta := range []string{"检查入口", "\n后续分析"} {
+		a.onMessage(envelope{Method: "item/reasoning/summaryTextDelta", Params: json.RawMessage(`{"threadId":"thread","itemId":"thinking","delta":` + strconv.Quote(delta) + `}`)})
+		view := a.composerView()
+		if !strings.Contains(view.HTML, ">检查入口</span>") || strings.Contains(view.HTML, "后续分析") || strings.Contains(view.HTML, "思考摘要") {
+			t.Fatal("streamed reasoning should update the collapsed group title", view.HTML)
+		}
 	}
 }
 

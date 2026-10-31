@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +19,10 @@ var stderrWriter = os.Stderr
 
 type input struct {
 	Type         string     `json:"type"`
-	Text         string     `json:"text"`
-	TextElements []struct{} `json:"text_elements"`
+	Text         string     `json:"text,omitempty"`
+	TextElements []struct{} `json:"text_elements,omitempty"`
+	Name         string     `json:"name,omitempty"`
+	Path         string     `json:"path,omitempty"`
 }
 type change struct {
 	Path string `json:"path"`
@@ -75,6 +78,7 @@ type chatItem struct {
 	groupRef      string
 	groupExpanded bool
 	html          string
+	linkBindings  []peb.EditorBinding
 }
 type approval struct {
 	id      json.RawMessage
@@ -124,7 +128,7 @@ func (p *threadPage) compact() {
 
 type agent struct {
 	ctx                                        context.Context
-	publisher                                  *peb.ActionPublisher
+	publisher                                  uiPublisher
 	commands                                   chan command
 	pending                                    [64]command
 	pendingHead, pendingCount                  int
@@ -136,6 +140,7 @@ type agent struct {
 	selected                                   *conversation
 	drafts                                     map[string]string
 	attachments                                map[attachmentScope][]string
+	skills                                     map[attachmentScope][]selectedSkill
 	filePicker                                 *filePicker
 	model, status                              string
 	effort, pendingModel                       string
@@ -144,6 +149,8 @@ type agent struct {
 	historyDirty, historyLoading               bool
 	composerPrefix                             string
 	composerBindings                           []peb.EditorBinding
+	completion                                 composerCompletion
+	turnInputs                                 []input
 	revealWorkspace                            bool
 	modelSettings                              bool
 	models                                     []modelOption
@@ -229,7 +236,7 @@ func (a *agent) reportError(err error) {
 	}
 	fmt.Fprintln(stderrWriter, err)
 	if err := a.publisher.Show(peb.UI{
-		ID: "error", Title: "Codex", Kind: peb.Notification, Context: a.context,
+		ID: "error", Title: "Codex", Kind: peb.Notification, Severity: peb.NotificationError, Context: a.context,
 		View: &peb.EditorView{HTML: "<p>" + html.EscapeString(err.Error()) + "</p>", CSS: "p { white-space: pre-wrap; }"},
 	}); err != nil {
 		fmt.Fprintln(stderrWriter, err)
@@ -265,6 +272,8 @@ func (a *agent) dirty() bool {
 // Release the previous conversation after any pending RPC returns. Drafts and
 // history remain available when the conversation is resumed later.
 func (a *agent) selectConversation(c *conversation) {
+	a.dismissCompletion()
+	a.completion.dismissed = ""
 	if a.selected != c {
 		if previous := a.selected; previous != nil {
 			previous.exitRequested, a.exitsPending = true, true
@@ -280,6 +289,7 @@ func (a *agent) selectConversation(c *conversation) {
 }
 
 func (a *agent) closeWorkspace() error {
+	a.completion = composerCompletion{}
 	a.workspaceOpen, a.revealWorkspace = false, false
 	a.composerPrefix, a.composerBindings = "", nil
 	if a.client != nil {
@@ -315,6 +325,7 @@ func (a *agent) exitConversations() {
 }
 
 func (a *agent) closeClient() {
+	a.completion.skillsLoaded = false
 	a.client.close()
 	a.client = nil
 	for _, c := range a.conversations {
@@ -424,6 +435,12 @@ func (a *agent) handleCommand(cmd command) error {
 	if e.ID == "files" {
 		return a.handleFileEvent(e.Event)
 	}
+	if e.Event.Kind == "click" && (e.ID == "composer" || strings.HasPrefix(e.ID, "directory/")) {
+		if ref, ok := strings.CutPrefix(e.Event.Ref, "directory/"); ok {
+			name, _, _ := strings.Cut(ref, "/")
+			return a.openDirectoryLink(name, e.Context)
+		}
+	}
 	if e.ID != "composer" {
 		return nil
 	}
@@ -450,11 +467,8 @@ func (a *agent) handleCommand(cmd command) error {
 		}
 	case "input":
 		if e.Event.Ref == "prompt" {
-			if c != nil {
-				c.draft = e.Event.Value
-			} else {
-				a.drafts[a.context.ProjectPath] = e.Event.Value
-			}
+			a.setDraft(e.Event.Value)
+			a.updateCompletion(e.Event)
 		} else if c != nil {
 			parts := strings.SplitN(e.Event.Ref, "/", 3)
 			if len(parts) == 3 && parts[0] == "answer" {
@@ -465,18 +479,19 @@ func (a *agent) handleCommand(cmd command) error {
 				}
 			}
 		}
+	case "completion":
+		if e.Event.Ref == "prompt" {
+			return a.handleCompletion(e.Event)
+		}
 	case "submit":
+		if a.completion.kind != 0 {
+			return a.handleCompletion(peb.EditorEvent{Kind: "click", Data: "accept"})
+		}
 		return a.send()
 	case "click":
 		switch e.Event.Ref {
 		case "send":
 			return a.send()
-		case "new":
-			if err := a.closeComposerMenus(); err != nil {
-				return err
-			}
-			a.selectConversation(nil)
-			a.status = ""
 		case "stop":
 			return a.interrupt(c)
 		case "history", "refresh-history":
@@ -484,11 +499,13 @@ func (a *agent) handleCommand(cmd command) error {
 		case "add-file":
 			return a.openFiles()
 		case "permission-settings":
+			a.dismissCompletion()
 			if a.permissionSettings {
 				return a.closePermissions()
 			}
 			return a.openPermissions()
 		case "model-settings":
+			a.dismissCompletion()
 			if a.modelSettings {
 				return a.closeModels()
 			}
@@ -500,6 +517,14 @@ func (a *agent) handleCommand(cmd command) error {
 				return a.loadHistory(c)
 			}
 		default:
+			if index, ok := strings.CutPrefix(e.Event.Ref, "completion/"); ok {
+				n, err := strconv.Atoi(index)
+				if err == nil && a.completion.kind != 0 && n >= 0 && n < a.completion.count {
+					a.completion.selected = n
+					return a.handleCompletion(peb.EditorEvent{Kind: "click", Data: "accept"})
+				}
+				return nil
+			}
 			if c != nil && c.handleChangesClick(e.Event.Ref) {
 				return nil
 			}
@@ -508,6 +533,10 @@ func (a *agent) handleCommand(cmd command) error {
 			}
 			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-file/"); ok {
 				a.removeAttachment(index)
+				return nil
+			}
+			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-skill/"); ok {
+				a.removeSkill(index)
 				return nil
 			}
 			if c != nil && strings.HasPrefix(e.Event.Ref, "item/") {
@@ -590,6 +619,7 @@ func shortTitle(text string) string {
 }
 
 func (a *agent) send() error {
+	a.dismissCompletion()
 	c := a.selected
 	prompt := a.drafts[a.context.ProjectPath]
 	if c != nil {
@@ -598,7 +628,8 @@ func (a *agent) send() error {
 	}
 	scope := a.attachmentScope()
 	files := a.attachments[scope]
-	if strings.TrimSpace(prompt) == "" && len(files) == 0 {
+	skills := a.skills[scope]
+	if strings.TrimSpace(prompt) == "" && len(files) == 0 && len(skills) == 0 {
 		return nil
 	}
 	if c != nil && c.busy {
@@ -619,9 +650,16 @@ func (a *agent) send() error {
 			a.attachments[a.attachmentScope()] = files
 			delete(a.attachments, scope)
 		}
+		if len(skills) > 0 {
+			a.skills[a.attachmentScope()] = skills
+			delete(a.skills, scope)
+		}
 	} else if !c.loaded {
 		if err := a.resume(c.ID); err != nil {
 			return err
+		}
+		if !c.loaded {
+			return fmt.Errorf("%s", c.status)
 		}
 	}
 	if c.busy {
@@ -638,14 +676,18 @@ func (a *agent) send() error {
 	c.status = ""
 	a.flush()
 	p := a.permission()
+	prompt = skillPrompt(prompt, skills)
+	a.turnInputs = append(a.turnInputs[:0], input{Type: "text", Text: attachmentPrompt(prompt, files)})
+	a.turnInputs = appendSkillInputs(a.turnInputs, prompt)
+	defer func() { clear(a.turnInputs); a.turnInputs = a.turnInputs[:0] }()
 	params := struct {
 		ThreadID      string        `json:"threadId"`
-		Input         [1]input      `json:"input"`
+		Input         []input       `json:"input"`
 		Model         string        `json:"model,omitempty"`
 		Effort        string        `json:"effort,omitempty"`
 		SandboxPolicy sandboxPolicy `json:"sandboxPolicy"`
 		approvalSettings
-	}{c.ID, [1]input{{Type: "text", Text: attachmentPrompt(prompt, files), TextElements: []struct{}{}}}, a.model, a.turnEffort(), p.policy, p.approvalSettings}
+	}{c.ID, a.turnInputs, a.model, a.turnEffort(), p.policy, p.approvalSettings}
 	result, err := call[struct {
 		Turn turn `json:"turn"`
 	}](a.client, "turn/start", params)
@@ -664,6 +706,7 @@ func (a *agent) send() error {
 	}
 	c.draft = ""
 	delete(a.attachments, a.attachmentScope())
+	delete(a.skills, a.attachmentScope())
 	if fresh {
 		delete(a.drafts, a.context.ProjectPath)
 	}
@@ -745,15 +788,33 @@ func (a *agent) resume(id string) error {
 			Sandbox      string `json:"sandbox"`
 			approvalSettings
 		}{id, true, p.sandbox, p.approvalSettings})
+		loaded := err == nil
 		if err != nil {
-			return err
+			rpcErr, ok := err.(*rpcError)
+			if !ok || rpcErr.Code != -32600 || rpcErr.Message != "thread "+id+" already has an active writer" {
+				return err
+			}
+			// Another app-server owns this thread. History reads do not need
+			// its writer lock; retry acquiring it when the user sends again.
+			result, err = call[struct {
+				Thread thread `json:"thread"`
+			}](a.client, "thread/read", struct {
+				ThreadID string `json:"threadId"`
+			}{id})
+			if err != nil {
+				return err
+			}
 		}
 		if c == nil {
 			c = &conversation{thread: result.Thread, context: a.context}
 			a.conversations[id] = c
 		}
 		c.thread = result.Thread
-		c.loaded = true
+		c.loaded = loaded
+		c.status = ""
+		if !loaded {
+			c.status = "此会话正由其他 Codex 实例使用，当前仅查看历史。请在该实例中释放会话后重新发送。"
+		}
 		if a.exitsPending {
 			c.exitRequested = true
 			return nil
@@ -821,7 +882,7 @@ func (a *agent) loadHistory(c *conversation) error {
 			progress = &turnProgress{}
 			progress.update(t, time.Now())
 		}
-		if t.Status == "inProgress" && c.turnRevision == revision {
+		if c.loaded && t.Status == "inProgress" && c.turnRevision == revision {
 			c.busy = true
 			c.turnID = t.ID
 			c.startProgress(t, time.Now())
@@ -906,6 +967,14 @@ func (c *conversation) item(id string) *chatItem {
 
 func (a *agent) onMessage(message envelope) {
 	if message.Method == "" {
+		return
+	}
+	if message.Method == "skills/changed" {
+		a.completion.skillsLoaded = false
+		a.completion.skillError = ""
+		if a.completion.kind == '/' {
+			a.dismissCompletion()
+		}
 		return
 	}
 	var event struct {

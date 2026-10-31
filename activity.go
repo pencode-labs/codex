@@ -33,7 +33,7 @@ var activityKinds = [...]activityInfo{
 	{activitySearch, "进行了搜索", "search"},
 	{activityCommand, "运行了命令", "terminal"},
 	{activityTool, "调用了工具", "wrench"},
-	{activityReasoning, "思考摘要", "wrench"},
+	{activityReasoning, "思考", "wrench"},
 }
 
 func (k activityKind) primary() (result activityInfo) {
@@ -115,7 +115,14 @@ func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items
 	if kinds != activityReasoning {
 		kinds &^= activityReasoning
 	}
-	if sweep && !first.groupExpanded {
+	if kinds == activityReasoning {
+		label := first.reasoningLabel()
+		if sweep && !first.groupExpanded {
+			renderSweepText(b, label)
+		} else {
+			b.WriteString(html.EscapeString(label))
+		}
+	} else if sweep && !first.groupExpanded {
 		var label strings.Builder
 		renderActivityTitle(&label, kinds)
 		renderSweepText(b, label.String())
@@ -244,17 +251,18 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 			writeActivityCount(b, removed)
 		}
 	case "reasoning":
-		if text := strings.TrimSpace(i.text.String()); text != "" {
-			line, _, _ := strings.Cut(text, "\n")
-			if line = strings.Trim(line, "*# \t\r"); line != "" {
-				b.WriteString(html.EscapeString(line))
-				return
-			}
-		}
-		b.WriteString(fallback)
+		b.WriteString(html.EscapeString(i.reasoningLabel()))
 	default:
 		b.WriteString(html.EscapeString(fallback))
 	}
+}
+
+func (i *chatItem) reasoningLabel() string {
+	line, _, _ := strings.Cut(strings.TrimSpace(i.text.String()), "\n")
+	if line = strings.Trim(line, "*# \t\r"); line != "" {
+		return line
+	}
+	return "思考"
 }
 
 func writeActivityCount(b *strings.Builder, count int) {
