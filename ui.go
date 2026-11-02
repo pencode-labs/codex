@@ -79,6 +79,10 @@ func (a *agent) composerView() *peb.EditorView {
 		draft, title, busy = a.selected.draft, a.selected.title(), a.selected.busy
 	}
 	b.WriteString(`<section class="codex-composer">`)
+	if busy && a.selected.files != nil && !a.selected.files.complete {
+		a.selected.files.prepareLive()
+		b.WriteString(a.selected.files.liveHTML)
+	}
 	b.WriteString(`<form id="pencode-extension-codex-`)
 	b.WriteString(a.uiScope)
 	b.WriteString(`form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)

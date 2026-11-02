@@ -26,8 +26,14 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 				a.onMessage(envelope{Method: method, Params: data})
 			}
 			notify("turn/started", map[string]any{"threadId": c.ID, "turn": turn{ID: "one", Status: "inProgress"}})
+			if strings.Contains(a.composerView().HTML, `class="codex-live-changes"`) {
+				t.Fatal("empty turn displayed a change pill")
+			}
 			edit := threadItem{ID: "edit", Type: "fileChange", Status: "inProgress", Changes: []change{{Path: "src/<file>.go", Diff: "--- a/file.go\n+++ b/file.go\n@@ -1 +1,2 @@\n-old\n+new\n+<script>\n"}}}
 			notify("item/started", map[string]any{"threadId": c.ID, "item": edit})
+			if strings.Contains(a.composerView().HTML, `class="codex-live-changes"`) {
+				t.Fatal("pending edit was counted before success")
+			}
 			edit.Status = "completed"
 			notify("item/completed", map[string]any{"threadId": c.ID, "item": edit})
 			// Completion may be repeated; aggregate each final item only once.
@@ -42,8 +48,16 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 			if strings.Contains(a.composerView().HTML, `class="codex-changes"`) {
 				t.Fatal("running turn displayed its final change summary")
 			}
+			running := a.composerView()
+			validateBindings(t, running)
+			if !strings.Contains(running.HTML, `class="codex-live-changes"`) || !strings.Contains(running.HTML, "1 个文件已更改") || !strings.Contains(running.HTML, `title="`+html.EscapeString(filepath.Join("src", "<file>.go"))+`"`) || strings.Contains(running.HTML, "excluded.go") || c.files.added != 3 || c.files.removed != 1 {
+				t.Fatal("running summary lost, duplicated, or failed to escape successful edits", running.HTML)
+			}
 			notify("turn/completed", map[string]any{"threadId": c.ID, "turn": turn{ID: "one", Status: status}})
 			view := a.composerView()
+			if strings.Contains(view.HTML, `class="codex-live-changes"`) {
+				t.Fatal("completed turn retained its live pill")
+			}
 			validateBindings(t, view)
 			path := html.EscapeString(filepath.Join("src", "<file>.go"))
 			if strings.Count(view.HTML, `class="codex-changes"`) != 1 || !strings.Contains(view.HTML, "已编辑 1 个文件") || !strings.Contains(view.HTML, path) || strings.Contains(view.HTML, "excluded.go") || strings.Contains(view.HTML, "<pre>") {
@@ -127,8 +141,12 @@ func TestFileChangesCachedWithoutAllocations(t *testing.T) {
 	f.complete = true
 	f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "file.go", Diff: "+new\n-old\n"}}})
 	f.prepare()
+	live := newTurnFiles("running", t.TempDir())
+	live.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "file.go", Diff: "+new\n"}}})
+	live.prepareLive()
 	if allocations := testing.AllocsPerRun(100, func() {
 		f.prepare()
+		live.prepareLive()
 		diffLineCounts("--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n")
 	}); allocations != 0 {
 		t.Fatalf("cached change summary allocated %g objects", allocations)
@@ -198,6 +216,9 @@ func TestRunningHistoryCompletesFileChanges(t *testing.T) {
 	defer a.client.close()
 	if !a.selected.busy || strings.Contains(a.composerView().HTML, `class="codex-changes"`) {
 		t.Fatal("resuming a running turn displayed final changes")
+	}
+	if !strings.Contains(a.composerView().HTML, "1 个文件已更改") || a.selected.files.added != 1 {
+		t.Fatal("resuming a running turn lost its live changes")
 	}
 	a.onMessage(envelope{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"saved","turn":{"id":"old-turn","status":"completed"}}`)})
 	view := a.composerView()

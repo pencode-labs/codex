@@ -13,6 +13,14 @@
 .codex-chat input, .codex-composer input { color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 8px; padding: 8px; }
 .codex-composer input { width: 180px; padding: 4px 8px; }
 .codex-composer { position: relative; min-width: 0; }
+.codex-live-changes { display: flex; justify-content: center; margin-bottom: 8px; }
+.codex-live-changes-anchor { position: relative; display: flex; justify-content: center; max-width: 100%; }
+.codex-composer .codex-live-changes-pill { display: flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 16px; color: var(--vscode-descriptionForeground); background: var(--vscode-editorWidget-background); font-family: ui; font-size: 13px; white-space: nowrap; }
+.codex-live-changes-popover { visibility: hidden; pointer-events: none; position: absolute; bottom: 100%; left: 50%; z-index: 9; width: 320px; max-width: calc(100vw - 32px); padding-bottom: 6px; transform: translateX(-50%); }
+.codex-live-changes-anchor:hover .codex-live-changes-popover, .codex-live-changes-anchor:focus-within .codex-live-changes-popover { visibility: visible; pointer-events: auto; }
+.codex-live-changes-list { max-height: 240px; overflow: auto; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 14px; color: var(--vscode-editor-foreground); background: var(--vscode-editorWidget-background); scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+.codex-live-change { display: flex; align-items: center; gap: 16px; padding: 8px 10px; }
+.codex-live-change .codex-change-path { flex: 1; }
 .codex-completion { position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 10; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 12px; background: var(--vscode-editorWidget-background); }
 .codex-completion-list { max-height: 280px; overflow: auto; }
 .codex-completion-heading { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px 6px; color: var(--vscode-descriptionForeground); font-size: 11px; }

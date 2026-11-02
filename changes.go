@@ -23,6 +23,7 @@ type turnFiles struct {
 	complete       bool
 	collapsed      bool
 	html           string
+	liveHTML       string
 	bindings       []peb.EditorBinding
 }
 
@@ -98,6 +99,30 @@ func (f *turnFiles) add(item threadItem) {
 		f.removed += removed
 	}
 	f.html = ""
+	f.liveHTML = ""
+}
+
+func (f *turnFiles) prepareLive() {
+	if f == nil || f.complete || len(f.files) == 0 || f.liveHTML != "" {
+		return
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="codex-live-changes"><div class="codex-live-changes-anchor"><button type="button" class="codex-live-changes-pill" aria-describedby="codex-live-changes-list">`)
+	writeActivityCount(&b, len(f.files))
+	b.WriteString(` 个文件已更改`)
+	renderChangeCounts(&b, f.added, f.removed)
+	b.WriteString(`</button><div class="codex-live-changes-popover"><div id="codex-live-changes-list" class="codex-live-changes-list" role="list" aria-label="本轮已更改的文件">`)
+	for _, file := range f.files {
+		b.WriteString(`<div class="codex-live-change" role="listitem"><span class="codex-change-path" title="`)
+		b.WriteString(html.EscapeString(file.path))
+		b.WriteString(`">`)
+		b.WriteString(html.EscapeString(file.path))
+		b.WriteString(`</span>`)
+		renderChangeCounts(&b, file.added, file.removed)
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div></div></div></div>`)
+	f.liveHTML = b.String()
 }
 
 func (f *turnFiles) prepare() {

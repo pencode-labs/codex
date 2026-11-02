@@ -881,7 +881,6 @@ func (a *agent) readHistory(c *conversation) error {
 		if files == nil {
 			files = newTurnFiles(t.ID, c.context.ProjectPath)
 		}
-		collect := !files.complete && t.Status != "inProgress"
 		var progress *turnProgress
 		if c.progress != nil && c.progress.id == t.ID {
 			progress = c.progress
@@ -897,10 +896,10 @@ func (a *agent) readHistory(c *conversation) error {
 			c.files = files
 		}
 		for _, item := range t.Items {
-			if collect {
-				files.add(item)
-			}
 			if !slices.ContainsFunc(c.items, func(i *chatItem) bool { return i.data.ID == item.ID }) {
+				if !files.complete {
+					files.add(item)
+				}
 				i := newChatItem(item, t.Status != "inProgress")
 				i.progress = progress
 				i.files = files
@@ -910,7 +909,7 @@ func (a *agent) readHistory(c *conversation) error {
 				older = append(older, i)
 			}
 		}
-		files.complete = files.complete || collect
+		files.complete = files.complete || t.Status != "inProgress"
 	}
 	c.items = append(older, c.items...)
 	c.cursor = page.NextCursor
@@ -1024,6 +1023,9 @@ func (a *agent) onMessage(message envelope) {
 	switch message.Method {
 	case "item/started", "item/completed":
 		i := c.item(event.Item.ID)
+		if message.Method == "item/completed" && !(i.complete && i.data.Type == "fileChange" && i.data.Status == "completed") && i.files != nil && !i.files.complete {
+			i.files.add(event.Item)
+		}
 		i.replace(event.Item, message.Method == "item/completed")
 		if i.progress != nil && i.modelText() {
 			i.progress.received = true
@@ -1058,11 +1060,6 @@ func (a *agent) onMessage(message envelope) {
 	case "turn/completed":
 		c.finishProgress(event.Turn, time.Now())
 		if c.files != nil && !c.files.complete {
-			for _, i := range c.items {
-				if i.files == c.files {
-					c.files.add(i.data)
-				}
-			}
 			c.files.complete = true
 		}
 		c.turnRevision++
