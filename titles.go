@@ -28,7 +28,7 @@ func (a *agent) generateTitle(c *conversation, prompt string) {
 	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
 	job := &titleJob{id: c.ID, cancel: cancel}
 	c.titleJob, c.dirty = job, true
-	root, path := c.context.ProjectPath, a.executablePath
+	root, path, serverURL := c.context.ProjectPath, a.executablePath, a.serverURL
 	if len(prompt) > 2048 {
 		end := 2048
 		for !utf8.RuneStart(prompt[end]) {
@@ -38,7 +38,7 @@ func (a *agent) generateTitle(c *conversation, prompt string) {
 	}
 	go func() {
 		defer cancel()
-		job.title, job.err = requestTitle(ctx, root, path, prompt)
+		job.title, job.err = requestTitle(ctx, root, path, serverURL, prompt)
 		select {
 		case a.commands <- command{title: job}:
 		case <-a.ctx.Done():
@@ -46,7 +46,7 @@ func (a *agent) generateTitle(c *conversation, prompt string) {
 	}()
 }
 
-func requestTitle(ctx context.Context, root, path, prompt string) (string, error) {
+func requestTitle(ctx context.Context, root, path, serverURL, prompt string) (string, error) {
 	var response string
 	var completed bool
 	var turnErr error
@@ -76,7 +76,7 @@ func requestTitle(ctx context.Context, root, path, prompt string) (string, error
 		}
 	}
 	var err error
-	client, err = startClient(ctx, root, path, handle)
+	client, err = startClient(ctx, root, path, serverURL, handle)
 	if err != nil {
 		return "", err
 	}
@@ -125,7 +125,15 @@ func requestTitle(ctx context.Context, root, path, prompt string) (string, error
 	if started.Thread.ID == "" {
 		return "", fmt.Errorf("Codex 未返回标题生成会话 ID")
 	}
-	_, err = call[json.RawMessage](client, "turn/start", struct {
+	var titleTurnID string
+	defer func() {
+		if !completed {
+			stopTitle(root, path, serverURL, started.Thread.ID, titleTurnID)
+		}
+	}()
+	startedTurn, err := call[struct {
+		Turn turn `json:"turn"`
+	}](client, "turn/start", struct {
 		ThreadID     string          `json:"threadId"`
 		Input        [1]input        `json:"input"`
 		Effort       string          `json:"effort"`
@@ -134,6 +142,7 @@ func requestTitle(ctx context.Context, root, path, prompt string) (string, error
 	if err != nil {
 		return "", err
 	}
+	titleTurnID = startedTurn.Turn.ID
 	for !completed {
 		select {
 		case <-ctx.Done():
@@ -158,6 +167,35 @@ func requestTitle(ctx context.Context, root, path, prompt string) (string, error
 		return "", fmt.Errorf("Codex 返回了空标题")
 	}
 	return shortTitle(result.Title), nil
+}
+
+// A title is owned by this worker, so cancellation must stop its inference as
+// well as disconnect. Chat connections deliberately leave their turns running.
+func stopTitle(root, path, serverURL, threadID, turnID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := startClient(ctx, root, path, serverURL, nil)
+	if err != nil {
+		return
+	}
+	defer client.close()
+	if _, err = call[json.RawMessage](client, "initialize", map[string]any{"clientInfo": map[string]string{"name": "pencode_codex", "version": "0.1.0"}}); err != nil {
+		return
+	}
+	if err = client.notify("initialized", struct{}{}); err != nil {
+		return
+	}
+	if turnID == "" {
+		// A cancelled turn/start may have succeeded before its reply arrived.
+		page, err := call[struct {
+			Data []turn `json:"data"`
+		}](client, "thread/turns/list", map[string]any{"threadId": threadID, "limit": 1, "sortDirection": "desc", "itemsView": "notLoaded"})
+		if err != nil || len(page.Data) == 0 || page.Data[0].Status != "inProgress" {
+			return
+		}
+		turnID = page.Data[0].ID
+	}
+	_, _ = call[json.RawMessage](client, "turn/interrupt", map[string]string{"threadId": threadID, "turnId": turnID})
 }
 
 func (a *agent) finishTitle(job *titleJob) error {

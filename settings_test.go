@@ -112,13 +112,13 @@ func TestExecutablePathStartsClientAndUpdatesWithoutInterrupting(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_PATH", filepath.Join(root, "missing-codex"))
 	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: root}}
 	update := func(path string) {
 		t.Helper()
 		value, _ := json.Marshal(path)
-		if err := a.handleCommand(command{settings: peb.SettingValues{"executablePath": value}}); err != nil {
+		if err := a.handleCommand(command{settings: peb.SettingValues{"executablePath": value, "serverURL": json.RawMessage(`""`)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -143,6 +143,7 @@ func TestExecutablePathStartsClientAndUpdatesWithoutInterrupting(t *testing.T) {
 	}
 	a.client.close()
 	a.client = nil
+	t.Setenv("PENCODE_CODEX_SERVER_URL", "")
 	update(filepath.Join(root, "new-codex"))
 	if err := a.connect(); err == nil || !strings.Contains(err.Error(), "new-codex") {
 		t.Fatalf("next connection did not use the new path: %v", err)

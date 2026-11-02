@@ -30,7 +30,9 @@ func serveAgent(input io.Reader, output io.Writer) error {
 	defer app.close()
 	return peb.ServeExtension(input, output, peb.Contributions{
 		Settings: []peb.Setting{{ID: "executablePath", Label: "Codex 可执行文件路径", Type: peb.SettingString, Default: json.RawMessage(`""`),
-			Description: "填写 Codex 可执行文件或其所在目录，留空自动查找。修改后重启扩展生效。"}},
+			Description: "填写 Codex 可执行文件或其所在目录，留空自动查找。用于启动共享服务，修改后下次连接生效。"},
+			{ID: "serverURL", Label: "Codex 共享服务地址", Type: peb.SettingString, Default: json.RawMessage(`""`),
+				Description: "留空自动启动或复用 Codex daemon。也可填写 ws://、wss:// 地址或 unix://绝对路径。修改后下次连接生效。"}},
 		Actions: []peb.Action{{ID: "chat", Tooltip: "Codex Agent", Icon: "resources/icons/chatgpt.svg", Location: peb.StatusBar}},
 	}, peb.Handlers{
 		Settings: app.configure,

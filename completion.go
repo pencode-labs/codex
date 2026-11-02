@@ -296,10 +296,14 @@ func (a *agent) renderCompletion(b *strings.Builder, bindings []peb.EditorBindin
 	} else {
 		b.WriteString("项目文件")
 	}
-	b.WriteString(`</span><span>↑↓ 选择 · Enter / Tab 确认 · Esc 关闭</span></div><div id="pencode-extension-codex-completion-list" class="codex-completion-list" data-ref="completion-list" data-pencode-region role="listbox" aria-label="输入建议">`)
+	b.WriteString(`</span><span>↑↓ 选择 · Enter / Tab 确认 · Esc 关闭</span></div><div id="pencode-extension-codex-`)
+	b.WriteString(a.uiScope)
+	b.WriteString(`completion-list" class="codex-completion-list" data-ref="completion-list" data-pencode-region role="listbox" aria-label="输入建议">`)
 	for index, item := range p.items[:p.count] {
 		ref := "completion/" + strconv.Itoa(index)
-		b.WriteString(`<button id="pencode-extension-codex-completion-option-`)
+		b.WriteString(`<button id="pencode-extension-codex-`)
+		b.WriteString(a.uiScope)
+		b.WriteString(`completion-option-`)
 		b.WriteString(strconv.Itoa(index))
 		b.WriteString(`" type="button" class="codex-completion-item" role="option" data-ref="`)
 		b.WriteString(ref)

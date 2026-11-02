@@ -17,7 +17,7 @@ func TestHistorySkipsBlockedRolloutScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PENCODE_CODEX_PATH", path)
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_HISTORY_PAGES", "1")
 	t.Setenv("PENCODE_CODEX_HISTORY_SCAN_GATE", filepath.Join(t.TempDir(), "blocked"))
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -63,7 +63,7 @@ func TestHistoryFollowsProjectChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PENCODE_CODEX_PATH", path)
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_HISTORY_PROJECTS", "1")
 	first, second := t.TempDir(), t.TempDir()
 	a := &agent{ctx: t.Context(), conversations: make(map[string]*conversation), drafts: map[string]string{first: "first draft", second: "second draft"}}

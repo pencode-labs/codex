@@ -15,14 +15,14 @@ func (p *capturedUI) CloseUI(id string) error {
 
 func TestTabPublisherScopesSurfacesAndAnchors(t *testing.T) {
 	var capture capturedUI
-	p := tabPublisher{publisher: &capture, prefix: "2/", ids: make(map[string]string)}
+	p := tabPublisher{publisher: &capture, prefix: "2-", ids: make(map[string]string)}
 	if err := p.Show(peb.UI{ID: "models", Anchor: "ui:composer#model-settings"}); err != nil {
 		t.Fatal(err)
 	}
-	if capture.ui.ID != "2/models" || capture.ui.Anchor != "ui:2/composer#model-settings" {
+	if capture.ui.ID != "2-models" || capture.ui.Anchor != "ui:2-composer#model-settings" {
 		t.Fatal("menu escaped its tab", capture.ui)
 	}
-	if err := p.CloseUI("models"); err != nil || !capture.ui.Close || capture.ui.ID != "2/models" {
+	if err := p.CloseUI("models"); err != nil || !capture.ui.Close || capture.ui.ID != "2-models" {
 		t.Fatal("closing menu escaped its tab", capture.ui, err)
 	}
 	_ = p.Show(peb.UI{ID: "composer"})
@@ -34,10 +34,10 @@ func TestTabPublisherScopesSurfacesAndAnchors(t *testing.T) {
 func TestWorkspaceRoutesEventsToOwningTab(t *testing.T) {
 	first := &workspaceTab{agent: &agent{commands: make(chan command, 2)}, open: true}
 	second := &workspaceTab{agent: &agent{commands: make(chan command, 2)}, open: true}
-	h := workspaceHost{tabs: map[string]*workspaceTab{"": first, "1/": second}, active: first}
+	h := workspaceHost{tabs: map[string]*workspaceTab{"": first, "1-": second}, active: first}
 	for _, event := range []peb.UIEvent{
-		{ID: "1/composer", Event: peb.EditorEvent{Kind: "visibilitychange", Value: "visible"}},
-		{ID: "1/models", Event: peb.EditorEvent{Kind: "click", Ref: "model/test"}},
+		{ID: "1-composer", Event: peb.EditorEvent{Kind: "visibilitychange", Value: "visible"}},
+		{ID: "1-models", Event: peb.EditorEvent{Kind: "click", Ref: "model/test"}},
 	} {
 		if err := h.handleEvent(event); err != nil {
 			t.Fatal(err)

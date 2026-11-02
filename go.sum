@@ -1,3 +1,5 @@
+github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
+github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/pencode-labs/pencode v0.0.0-20261029165847-e535e9d97dba h1:Rwp+DjQhVGVMoDMFg3cMmYlQuwgw4P9DD9z1OZ2S6NU=
 github.com/pencode-labs/pencode v0.0.0-20261029165847-e535e9d97dba/go.mod h1:V/MHMDnan4bRQHnrJfAOw8AO4zdV6XSsqXoubsEMhRk=
 github.com/yuin/goldmark/v2 v2.1.9 h1:C5AZWQOm71NKdpMapPEYEB/UIRHDiMb3h5AJRHxzkXQ=

@@ -132,7 +132,7 @@ func TestHistoryRestoresTurnDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PENCODE_CODEX_PATH", path)
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_TURN_DURATION", "1")
 	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: t.TempDir()}, conversations: make(map[string]*conversation)}
 	if err := a.resume("saved"); err != nil {

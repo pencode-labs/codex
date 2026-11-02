@@ -135,6 +135,8 @@ type agent struct {
 	done                                       chan struct{}
 	client                                     *rpcClient
 	executablePath                             string
+	serverURL                                  string
+	uiScope                                    string
 	context                                    peb.ActionContext
 	conversations                              map[string]*conversation
 	selected                                   *conversation
@@ -252,7 +254,7 @@ func (a *agent) handlePendingCommand(cmd command) {
 	}
 	if !cmd.action {
 		switch cmd.event.Event.Kind {
-		case "open", "close", "visibilitychange":
+		case "open", "close", "closerequest", "visibilitychange":
 			a.processCommand(cmd)
 			return
 		}
@@ -311,16 +313,7 @@ func (a *agent) exitConversations() {
 		return
 	}
 	a.exitsPending = false
-	for _, c := range a.conversations {
-		if !c.exitRequested {
-			continue
-		}
-		// Tab closes can arrive inside an RPC wait. Interrupt from the actor
-		// loop after that request returns, including a pending turn/start.
-		a.reportError(a.interrupt(c))
-	}
-	// Unsubscribe alone retains the thread for an inactivity grace period.
-	// Reap our server before opening another conversation to release it now.
+	// Disconnect only this subscriber. The shared daemon owns running turns.
 	a.closeClient()
 }
 
@@ -369,7 +362,7 @@ func (a *agent) connect() error {
 	if !filepath.IsAbs(root) {
 		return fmt.Errorf("请先打开项目目录，再使用 Codex")
 	}
-	client, err := startClient(a.ctx, root, a.executablePath, a.onMessage)
+	client, err := startClient(a.ctx, root, a.executablePath, a.serverURL, a.onMessage)
 	if err != nil {
 		return err
 	}
@@ -408,6 +401,7 @@ func (a *agent) handleCommand(cmd command) error {
 		path, err := peb.DecodeSetting[string](cmd.settings, "executablePath")
 		if err == nil {
 			a.executablePath = path
+			a.serverURL, err = peb.DecodeSetting[string](cmd.settings, "serverURL")
 		}
 		return err
 	}
@@ -459,6 +453,8 @@ func (a *agent) handleCommand(cmd command) error {
 	}
 	c := a.selected
 	switch e.Event.Kind {
+	case "closerequest":
+		return a.requestCloseWorkspace()
 	case "close":
 		return a.closeWorkspace()
 	case "visibilitychange":
@@ -779,6 +775,19 @@ func (a *agent) resume(id string) error {
 		return err
 	}
 	if c == nil || !c.loaded {
+		fresh := c == nil
+		if fresh {
+			// Resume may replay live events and approvals before its response.
+			c = &conversation{thread: thread{ID: id}, context: a.context}
+			a.conversations[id] = c
+		}
+		c.items, c.progress, c.files, c.cursor = nil, nil, nil, ""
+		resumed := false
+		defer func() {
+			if fresh && !resumed {
+				delete(a.conversations, id)
+			}
+		}()
 		p := a.permission()
 		result, err := call[struct {
 			Thread thread `json:"thread"`
@@ -805,25 +814,18 @@ func (a *agent) resume(id string) error {
 				return err
 			}
 		}
-		if c == nil {
-			c = &conversation{thread: result.Thread, context: a.context}
-			a.conversations[id] = c
-		}
+		resumed = true
 		c.thread = result.Thread
 		c.loaded = loaded
 		c.status = ""
 		if !loaded {
-			c.status = "此会话正由其他 Codex 实例使用，当前仅查看历史。请在该实例中释放会话后重新发送。"
+			c.status = "此会话由另一个 Codex 服务持有，当前仅查看历史。请连接同一共享服务，或在原服务释放会话后重新发送。"
 		}
 		if a.exitsPending {
 			c.exitRequested = true
 			return nil
 		}
-		c.items = nil
-		c.progress = nil
-		c.files = nil
-		c.cursor = ""
-		if err = a.loadHistory(c); err != nil {
+		if err = a.readHistory(c); err != nil {
 			a.closeClient()
 			return err
 		}
@@ -853,6 +855,11 @@ func (a *agent) loadHistory(c *conversation) error {
 	if c.busy && (len(c.items) > 0 || c.cursor != "") {
 		return fmt.Errorf("请在当前任务结束后加载更早记录")
 	}
+	return a.readHistory(c)
+}
+
+// Initial hydration must also work when resume has replayed live items.
+func (a *agent) readHistory(c *conversation) error {
 	revision := c.turnRevision
 	page, err := call[struct {
 		Data       []turn `json:"data"`
@@ -1068,7 +1075,7 @@ func (a *agent) onMessage(message envelope) {
 		if event.Turn.Status == "interrupted" {
 			c.status = "任务已停止"
 		}
-		if !a.workspaceOpen || a.selected != c {
+		if !a.workspaceOpen || c.exitRequested {
 			c.items = nil
 			c.files = nil
 			c.loaded = false

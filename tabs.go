@@ -14,7 +14,7 @@ type uiPublisher interface {
 	CloseUI(string) error
 }
 
-// Each tab owns its actor and app-server so a new conversation cannot replace
+// Each tab owns its actor and connection to the shared app-server, preserving
 // another tab's draft, transcript, approvals or running turn.
 type workspaceTab struct {
 	*agent
@@ -45,12 +45,12 @@ func (h *workspaceHost) configure(values peb.SettingValues) error {
 func (h *workspaceHost) newTab(ctx peb.ActionContext) error {
 	prefix := ""
 	if h.next != 0 {
-		prefix = strconv.FormatUint(h.next, 10) + "/"
+		prefix = strconv.FormatUint(h.next, 10) + "-"
 	}
 	h.next++
 	actorCtx, cancel := context.WithCancel(h.ctx)
 	tab := &workspaceTab{agent: &agent{
-		ctx: actorCtx, publisher: &tabPublisher{publisher: h.publisher, prefix: prefix, ids: make(map[string]string)},
+		ctx: actorCtx, uiScope: prefix, publisher: &tabPublisher{publisher: h.publisher, prefix: prefix, ids: make(map[string]string)},
 		commands: make(chan command, 64), done: make(chan struct{}),
 	}, cancel: cancel, open: true}
 	h.tabs[prefix], h.active = tab, tab
@@ -76,7 +76,7 @@ func (h *workspaceHost) open(ctx peb.ActionContext) error {
 
 func (h *workspaceHost) handleEvent(e peb.UIEvent) error {
 	prefix := ""
-	if scope, local, ok := strings.Cut(e.ID, "/"); ok {
+	if scope, local, ok := strings.Cut(e.ID, "-"); ok {
 		if _, err := strconv.ParseUint(scope, 10, 64); err == nil {
 			prefix, e.ID = e.ID[:len(scope)+1], local
 		}

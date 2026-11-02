@@ -1,15 +1,20 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 type rpcError struct {
@@ -20,21 +25,20 @@ type rpcError struct {
 func (e *rpcError) Error() string { return fmt.Sprintf("Codex (%d): %s", e.Code, e.Message) }
 
 type envelope struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-	Result json.RawMessage `json:"result"`
-	Error  *rpcError       `json:"error"`
+	ID     json.RawMessage `json:"id,omitempty"`
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *rpcError       `json:"error,omitempty"`
 }
 
 type rpcClient struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
 	writer   *json.Encoder
 	messages chan envelope
 	done     chan struct{}
+	ready    chan struct{}
 	err      error // Published before messages closes.
 	next     uint64
 	handle   func(envelope)
@@ -42,67 +46,53 @@ type rpcClient struct {
 	dispatch func(command)
 }
 
-func startClient(parent context.Context, root, path string, handle func(envelope)) (*rpcClient, error) {
-	path, err := resolveExecutablePath(root, path)
-	if err != nil {
-		return nil, err
+func startClient(parent context.Context, root, path, serverURL string, handle func(envelope)) (*rpcClient, error) {
+	serverURL = strings.TrimSpace(serverURL)
+	if serverURL == "" {
+		serverURL = strings.TrimSpace(os.Getenv("PENCODE_CODEX_SERVER_URL"))
+	}
+	if serverURL == "" {
+		var err error
+		path, err = resolveExecutablePath(root, path)
+		if err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(parent)
-	cmd := exec.CommandContext(ctx, path, "app-server")
-	cmd.Dir, cmd.Stderr = root, os.Stderr
-	hideWindow(cmd)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	// EOF lets app-server shut down its threads and release their locks. Bound
-	// the grace period so an unresponsive server cannot block extension exit.
-	cmd.Cancel = func() error { _ = stdin.Close(); return nil }
-	cmd.WaitDelay = time.Second
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		_ = stdin.Close()
-		return nil, err
-	}
-	if err = cmd.Start(); err != nil {
-		cancel()
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return nil, fmt.Errorf("启动 Codex app-server: %w（请检查 Codex 可执行文件路径；留空时需在 PATH 中提供 codex）", err)
-	}
-	c := &rpcClient{ctx: ctx, cancel: cancel, cmd: cmd, stdin: stdin, writer: json.NewEncoder(stdin), messages: make(chan envelope, 128), done: make(chan struct{}), handle: handle}
+	c := &rpcClient{ctx: ctx, cancel: cancel, messages: make(chan envelope, 128), done: make(chan struct{}), ready: make(chan struct{}), handle: handle}
 	go func() {
 		defer close(c.done)
 		defer close(c.messages)
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 64<<10), 8<<20)
-		for scanner.Scan() {
-			if ctx.Err() != nil {
-				continue
+		conn, err := connectServer(ctx, root, path, serverURL)
+		if err != nil {
+			c.err = err
+			close(c.ready)
+			return
+		}
+		defer conn.CloseNow()
+		conn.SetReadLimit(8 << 20)
+		c.writer = json.NewEncoder(socketWriter{ctx, conn})
+		close(c.ready)
+		for {
+			kind, data, err := conn.Read(ctx)
+			if err != nil {
+				c.err = err
+				return
+			}
+			if kind != websocket.MessageText {
+				c.err = errors.New("Codex 返回了非文本 WebSocket 消息")
+				return
 			}
 			var message envelope
-			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+			if err := json.Unmarshal(data, &message); err != nil {
 				c.err = fmt.Errorf("解析 Codex 消息: %w", err)
-				cancel()
-				continue
+				return
 			}
 			select {
 			case c.messages <- message:
 			case <-ctx.Done():
-				// Drain stdout until shutdown finishes, even if the actor stopped.
+				return
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			c.err = err
-			cancel()
-		}
-		if err := cmd.Wait(); c.err == nil {
-			c.err = err
-		}
-		if c.err == nil {
-			c.err = io.EOF
 		}
 	}()
 	return c, nil
@@ -113,8 +103,87 @@ func (c *rpcClient) close() {
 		return
 	}
 	c.cancel()
-	_ = c.stdin.Close()
 	<-c.done
+}
+
+// Encoder writes one complete JSON-RPC message per text frame.
+type socketWriter struct {
+	ctx  context.Context
+	conn *websocket.Conn
+}
+
+func (w socketWriter) Write(data []byte) (int, error) {
+	if err := w.conn.Write(w.ctx, websocket.MessageText, data); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+func connectServer(ctx context.Context, root, path, endpoint string) (*websocket.Conn, error) {
+	if endpoint == "" {
+		cmd := exec.CommandContext(ctx, path, "app-server", "daemon", "start")
+		cmd.Dir, cmd.Stderr, cmd.WaitDelay = root, stderrWriter, time.Second
+		hideWindow(cmd)
+		output, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("启动 Codex 共享服务（%s app-server daemon start）：%w", path, err)
+		}
+		var daemon struct {
+			SocketPath string `json:"socketPath"`
+		}
+		if err := json.Unmarshal(output, &daemon); err != nil {
+			return nil, fmt.Errorf("读取 Codex 共享服务地址：%w", err)
+		}
+		if !filepath.IsAbs(daemon.SocketPath) {
+			return nil, fmt.Errorf("Codex daemon 未返回绝对 socketPath，请检查 CLI 版本或设置共享服务地址")
+		}
+		endpoint = "unix://" + daemon.SocketPath
+	}
+	var options websocket.DialOptions
+	if socket, ok := strings.CutPrefix(endpoint, "unix://"); ok {
+		if !filepath.IsAbs(socket) {
+			return nil, fmt.Errorf("Codex Unix socket 路径必须是绝对路径：%q", socket)
+		}
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		}}
+		defer transport.CloseIdleConnections()
+		options.HTTPClient = &http.Client{Transport: transport}
+		endpoint = "ws://localhost/"
+	} else if !strings.HasPrefix(endpoint, "ws://") && !strings.HasPrefix(endpoint, "wss://") {
+		return nil, fmt.Errorf("Codex 服务地址必须使用 ws://、wss:// 或 unix://绝对路径")
+	}
+	if token := os.Getenv("PENCODE_CODEX_SERVER_TOKEN"); token != "" {
+		options.HTTPHeader = http.Header{"Authorization": {"Bearer " + token}}
+	}
+	conn, _, err := websocket.Dial(ctx, endpoint, &options)
+	if err != nil {
+		return nil, fmt.Errorf("连接 Codex 共享服务：%w", err)
+	}
+	return conn, nil
+}
+
+// Daemon startup can include installation; lifecycle events must remain responsive.
+func (c *rpcClient) awaitReady(timeout <-chan time.Time) error {
+	if c.ready == nil {
+		return nil
+	}
+	for {
+		select {
+		case cmd := <-c.commands:
+			c.dispatch(cmd)
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-timeout:
+			c.cancel()
+			return context.DeadlineExceeded
+		case <-c.ready:
+			if c.writer == nil {
+				return c.err
+			}
+			return nil
+		}
+	}
 }
 
 func (c *rpcClient) notify(method string, params any) error {
@@ -133,9 +202,14 @@ func (c *rpcClient) reply(id json.RawMessage, result any, rpcErr *rpcError) erro
 }
 
 // The actor owns all writes; requests continue dispatching streamed events while
-// awaiting their response. The pipe reader never touches conversation state.
+// awaiting their response. The socket reader never touches conversation state.
 func call[T any](c *rpcClient, method string, params any) (T, error) {
 	var result T
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	if err := c.awaitReady(timeout.C); err != nil {
+		return result, err
+	}
 	c.next++
 	id := c.next
 	if err := c.writer.Encode(struct {
@@ -145,8 +219,6 @@ func call[T any](c *rpcClient, method string, params any) (T, error) {
 	}{id, method, params}); err != nil {
 		return result, err
 	}
-	timeout := time.NewTimer(30 * time.Second)
-	defer timeout.Stop()
 	for {
 		select {
 		case cmd := <-c.commands:
@@ -166,7 +238,9 @@ func call[T any](c *rpcClient, method string, params any) (T, error) {
 				return result, io.EOF
 			}
 			if message.Method != "" {
-				c.handle(message)
+				if c.handle != nil {
+					c.handle(message)
+				}
 				continue
 			}
 			var responseID uint64

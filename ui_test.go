@@ -93,7 +93,7 @@ func TestHistoryRefreshRetainsPublishedChat(t *testing.T) {
 func TestHistoryRefreshOnlyDirtiesHistory(t *testing.T) {
 	path, _ := os.Executable()
 	t.Setenv("PENCODE_CODEX_PATH", path)
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: t.TempDir()}, workspaceOpen: true}
 	if err := a.listHistory(""); err != nil {
 		t.Fatal(err)

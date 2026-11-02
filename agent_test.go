@@ -23,7 +23,15 @@ import (
 
 func TestMain(m *testing.M) {
 	if os.Getenv("PENCODE_CODEX_FIXTURE") == "1" && len(os.Args) > 1 && os.Args[1] == "app-server" {
-		fixtureServer()
+		if len(os.Args) > 2 && os.Args[2] == "fixture-listen" {
+			path, _ := os.Executable()
+			server, closeServer := fixtureWebSocket(context.Background(), path)
+			defer closeServer()
+			fmt.Println("ws" + strings.TrimPrefix(server.URL, "http"))
+			_, _ = io.Copy(io.Discard, os.Stdin)
+		} else {
+			fixtureServer()
+		}
 		return
 	}
 	os.Exit(m.Run())
@@ -356,7 +364,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PENCODE_CODEX_PATH", filepath.Join(t.TempDir(), "missing-codex"))
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	gate := filepath.Join(t.TempDir(), "start-codex")
 	t.Setenv("PENCODE_CODEX_STARTUP_GATE", gate)
 	historyGate := filepath.Join(t.TempDir(), "read-history")
@@ -398,14 +406,14 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		if err != nil || f.Kind != peb.Register || len(c.Actions) != 1 || c.Actions[0].Location != peb.StatusBar {
 			t.Fatal("invalid registration", f, err)
 		}
-		if len(c.Settings) != 1 || c.Settings[0].ID != "executablePath" || c.Settings[0].Type != peb.SettingString || string(c.Settings[0].Default) != `""` {
+		if len(c.Settings) != 2 || c.Settings[0].ID != "executablePath" || c.Settings[0].Type != peb.SettingString || string(c.Settings[0].Default) != `""` {
 			t.Fatal("missing executable path setting", c.Settings)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("registration timed out")
 	}
 	pathValue, _ := json.Marshal(path)
-	settings, _ := peb.EncodeSettingValues(nil, peb.SettingValues{"executablePath": pathValue})
+	settings, _ := peb.EncodeSettingValues(nil, peb.SettingValues{"executablePath": pathValue, "serverURL": json.RawMessage(`""`)})
 	write(peb.SettingsRequest, 2, settings)
 	write(peb.ActionActivate, 0, nil)
 	ctx := peb.ActionContext{ID: "chat", ProjectPath: t.TempDir()}
@@ -421,7 +429,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		}
 		write(peb.UIRequest, id, data)
 		if surface == "composer" && kind == "click" && ref == "new" {
-			scope = strconv.Itoa(nextTab) + "/"
+			scope = strconv.Itoa(nextTab) + "-"
 			nextTab++
 		}
 	}
@@ -452,7 +460,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 					t.Fatal(err)
 				}
 				local := ui.ID
-				if prefix, rest, ok := strings.Cut(local, "/"); ok {
+				if prefix, rest, ok := strings.Cut(local, "-"); ok {
 					if _, err := strconv.Atoi(prefix); err == nil {
 						local = rest
 					}
@@ -915,7 +923,7 @@ func validateBindings(t *testing.T, v *peb.EditorView) {
 func TestHistoryResumeAndReversePagination(t *testing.T) {
 	path, _ := os.Executable()
 	t.Setenv("PENCODE_CODEX_PATH", path)
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_TURN_PAGES", "1")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -947,7 +955,7 @@ func TestHistoryResumeAndReversePagination(t *testing.T) {
 func TestHistoryRetainsNewThreadsAndDeduplicatesPages(t *testing.T) {
 	path, _ := os.Executable()
 	t.Setenv("PENCODE_CODEX_PATH", path)
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_HISTORY_PAGES", "1")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1034,9 +1042,7 @@ func TestBoundedStreamAndIdleAllocations(t *testing.T) {
 }
 
 func TestLiveAppServer(t *testing.T) {
-	if os.Getenv("PENCODE_CODEX_INTEGRATION") != "1" {
-		t.Skip("set PENCODE_CODEX_INTEGRATION=1 for a local CLI smoke test")
-	}
+	liveCodexHome(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	a := &agent{ctx: ctx, context: peb.ActionContext{ProjectPath: t.TempDir()}, conversations: make(map[string]*conversation)}

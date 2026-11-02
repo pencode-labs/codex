@@ -79,7 +79,9 @@ func (a *agent) composerView() *peb.EditorView {
 		draft, title, busy = a.selected.draft, a.selected.title(), a.selected.busy
 	}
 	b.WriteString(`<section class="codex-composer">`)
-	b.WriteString(`<form id="pencode-extension-codex-form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
+	b.WriteString(`<form id="pencode-extension-codex-`)
+	b.WriteString(a.uiScope)
+	b.WriteString(`form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`">`)
 	files := a.attachments[a.attachmentScope()]
@@ -117,11 +119,17 @@ func (a *agent) composerView() *peb.EditorView {
 		}
 		b.WriteString(`</div>`)
 	}
-	b.WriteString(`<textarea id="pencode-extension-codex-prompt" data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form"`)
+	b.WriteString(`<textarea id="pencode-extension-codex-`)
+	b.WriteString(a.uiScope)
+	b.WriteString(`prompt" data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form"`)
 	if a.completion.kind != 0 {
-		b.WriteString(` data-pencode-completion="true" aria-expanded="true" aria-controls="pencode-extension-codex-completion-list" aria-autocomplete="list"`)
+		b.WriteString(` data-pencode-completion="true" aria-expanded="true" aria-controls="pencode-extension-codex-`)
+		b.WriteString(a.uiScope)
+		b.WriteString(`completion-list" aria-autocomplete="list"`)
 		if a.completion.count != 0 {
-			b.WriteString(` aria-activedescendant="pencode-extension-codex-completion-option-`)
+			b.WriteString(` aria-activedescendant="pencode-extension-codex-`)
+			b.WriteString(a.uiScope)
+			b.WriteString(`completion-option-`)
 			b.WriteString(strconv.Itoa(a.completion.selected))
 			b.WriteByte('"')
 		}

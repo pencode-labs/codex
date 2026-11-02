@@ -4,19 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/pencode-labs/pencode/peb"
 )
 
 func TestTitleGenerationUsesIsolatedStructuredTurn(t *testing.T) {
 	path, _ := os.Executable()
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	for _, prompt := range []string{"实现一个功能", "invalid title", "empty title", "title failure"} {
 		t.Run(prompt, func(t *testing.T) {
-			title, err := requestTitle(t.Context(), t.TempDir(), path, prompt)
+			title, err := requestTitle(t.Context(), t.TempDir(), path, "", prompt)
 			if prompt == "实现一个功能" {
 				if err != nil || title != "实现功能" {
 					t.Fatalf("title = %q, err = %v", title, err)
@@ -31,7 +35,7 @@ func TestTitleGenerationUsesIsolatedStructuredTurn(t *testing.T) {
 func TestGeneratedTitlePersistsForInactiveConversation(t *testing.T) {
 	path, _ := os.Executable()
 	t.Setenv("PENCODE_CODEX_PATH", path)
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	job := &titleJob{id: "saved", title: "自动标题"}
 	c := &conversation{thread: thread{ID: "saved"}, titleJob: job}
 	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: t.TempDir()}, conversations: map[string]*conversation{c.ID: c}, history: threadPage{Data: []thread{c.thread}}}
@@ -70,7 +74,7 @@ func TestManualTitleCancelsGenerationAndRejectsLateResult(t *testing.T) {
 
 func TestTitleGenerationCanBeCancelledWithoutBlockingActor(t *testing.T) {
 	path, _ := os.Executable()
-	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	fixtureExecutable(t)
 	gate := t.TempDir() + "/gate"
 	t.Setenv("PENCODE_CODEX_TITLE_GATE", gate)
 	c := &conversation{thread: thread{ID: "saved"}, context: peb.ActionContext{ProjectPath: t.TempDir()}}
@@ -106,5 +110,89 @@ func TestTitleGenerationCanBeCancelledWithoutBlockingActor(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("title generation blocked cancellation")
+	}
+}
+
+func TestCancelledTitleStopsItsSharedServerTurn(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			_, data, err := conn.Read(t.Context())
+			if err != nil {
+				return
+			}
+			var request envelope
+			if json.Unmarshal(data, &request) != nil {
+				return
+			}
+			result := any(struct{}{})
+			switch request.Method {
+			case "initialized":
+				continue
+			case "initialize":
+			case "config/read":
+				result = map[string]any{"config": map[string]any{"mcp_servers": map[string]any{}}}
+			case "thread/start":
+				result = map[string]any{"thread": thread{ID: "title"}}
+			case "turn/start":
+				result = map[string]any{"turn": turn{ID: "title-turn", Status: "inProgress"}}
+			case "thread/turns/list":
+				result = map[string]any{"data": []turn{{ID: "title-turn", Status: "inProgress"}}}
+			case "turn/interrupt":
+				var target struct {
+					ThreadID string `json:"threadId"`
+					TurnID   string `json:"turnId"`
+				}
+				_ = json.Unmarshal(request.Params, &target)
+				if target.ThreadID != "title" || target.TurnID != "title-turn" {
+					return
+				}
+				close(stopped)
+			default:
+				return
+			}
+			payload, _ := json.Marshal(result)
+			response, _ := json.Marshal(envelope{ID: request.ID, Result: payload})
+			if err := conn.Write(t.Context(), websocket.MessageText, response); err != nil {
+				return
+			}
+			if request.Method == "turn/start" {
+				close(started)
+			}
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := requestTitle(ctx, t.TempDir(), "", "ws"+strings.TrimPrefix(server.URL, "http"), "title")
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("title turn did not start")
+	}
+	// Cancellation can race the turn/start response; cleanup must find the turn.
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("title cancellation blocked")
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("title cancellation left shared inference running")
 	}
 }
