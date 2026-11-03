@@ -19,7 +19,6 @@ func TestOccupiedThreadOpensHistoryAndRetriesResume(t *testing.T) {
 	}
 	t.Setenv("PENCODE_CODEX_WRITER_LOCK", lock)
 	t.Setenv("PENCODE_CODEX_TURN_PAGES", "1")
-	t.Setenv("PENCODE_CODEX_TURN_CHANGES", "running")
 	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: t.TempDir()}, conversations: make(map[string]*conversation), workspaceOpen: true}
 	t.Cleanup(a.closeClient)
 	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "click", Ref: "history/saved"}}}); err != nil {
@@ -52,7 +51,7 @@ func TestOccupiedThreadOpensHistoryAndRetriesResume(t *testing.T) {
 	if err := a.resume(c.ID); err != nil {
 		t.Fatal("released thread could not be resumed", err)
 	}
-	if a.selected != c || !c.loaded || !c.busy || c.turnID != "old-turn" || c.status != "" || c.draft != "continue" || len(a.attachments[a.attachmentScope()]) != 1 {
+	if a.selected != c || !c.loaded || c.busy || c.turnID != "" || c.status != "" || c.draft != "continue" || len(a.attachments[a.attachmentScope()]) != 1 {
 		t.Fatal("released thread did not restore ownership and its draft", c)
 	}
 }

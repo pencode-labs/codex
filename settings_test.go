@@ -55,6 +55,16 @@ func TestResolveExecutablePath(t *testing.T) {
 	}
 }
 
+func TestLoginShellPATH(t *testing.T) {
+	shell := filepath.Join(t.TempDir(), "shell")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\nprintf '%s' \"__PENCODE_PATH_START__/custom/bin:/opt/homebrew/bin__PENCODE_PATH_END__\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := loginShellPATH(shell); got != "/custom/bin:/opt/homebrew/bin" {
+		t.Fatalf("login shell PATH = %q", got)
+	}
+}
+
 func TestResolveExecutableDirectory(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "Codex CLI")

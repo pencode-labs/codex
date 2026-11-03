@@ -63,9 +63,13 @@ type turn struct {
 	DurationMs  *int64       `json:"durationMs"`
 }
 type thread struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Preview string `json:"preview"`
+	ID      string       `json:"id"`
+	Name    string       `json:"name"`
+	Preview string       `json:"preview"`
+	Status  threadStatus `json:"status"`
+}
+type threadStatus struct {
+	Type string `json:"type"`
 }
 type chatItem struct {
 	data          threadItem
@@ -77,6 +81,7 @@ type chatItem struct {
 	detailRef     string
 	groupRef      string
 	groupExpanded bool
+	sweep         bool
 	html          string
 	linkBindings  []peb.EditorBinding
 }
@@ -88,17 +93,22 @@ type approval struct {
 }
 type conversation struct {
 	thread
-	titleJob              *titleJob
-	progress              *turnProgress
-	files                 *turnFiles
-	context               peb.ActionContext
-	items                 []*chatItem
-	requests              []*approval
-	draft, turnID, cursor string
-	status                string
-	turnRevision          uint64
-	busy, dirty, loaded   bool
-	exitRequested         bool
+	titleJob                     *titleJob
+	progress                     *turnProgress
+	files                        *turnFiles
+	context                      peb.ActionContext
+	items                        []*chatItem
+	requests                     []*approval
+	draft, turnID, cursor        string
+	status                       string
+	turnRevision                 uint64
+	busy, dirty, loaded          bool
+	unread                       bool
+	observing                    bool
+	observedTurn, observedStatus string
+	observedDigest               [32]byte
+	syncAfter                    time.Time
+	syncError                    string
 }
 type threadPage struct {
 	Data       []thread `json:"data"`
@@ -136,7 +146,6 @@ type agent struct {
 	client                                     *rpcClient
 	executablePath                             string
 	serverURL                                  string
-	uiScope                                    string
 	context                                    peb.ActionContext
 	conversations                              map[string]*conversation
 	selected                                   *conversation
@@ -154,6 +163,7 @@ type agent struct {
 	completion                                 composerCompletion
 	turnInputs                                 []input
 	revealWorkspace                            bool
+	workspaceHidden                            bool
 	modelSettings                              bool
 	models                                     []modelOption
 	modelsLoaded                               bool
@@ -161,7 +171,6 @@ type agent struct {
 	permissionIndex                            int
 	permissionSettings, permissionHelp         bool
 	renameID, renameValue                      string
-	exitsPending                               bool
 }
 
 func (a *agent) run() {
@@ -175,12 +184,13 @@ func (a *agent) run() {
 	progressTimer := time.NewTimer(time.Hour)
 	progressTimer.Stop()
 	defer progressTimer.Stop()
+	syncTimer := time.NewTimer(time.Hour)
+	syncTimer.Stop()
+	defer syncTimer.Stop()
+	var syncTick <-chan time.Time
 	var progressTick <-chan time.Time
 	var tick <-chan time.Time
 	for {
-		if a.exitsPending {
-			a.exitConversations()
-		}
 		var messages <-chan envelope
 		if a.client != nil {
 			messages = a.client.messages
@@ -207,6 +217,9 @@ func (a *agent) run() {
 			case <-progressTick:
 				a.updateProgress(time.Now())
 				progressTick = nil
+			case <-syncTick:
+				a.syncObserved()
+				syncTick = nil
 			case <-tick:
 				a.flush()
 				tick = nil
@@ -220,6 +233,15 @@ func (a *agent) run() {
 		} else if progressTick != nil {
 			progressTimer.Stop()
 			progressTick = nil
+		}
+		if a.hasObservers() {
+			if syncTick == nil {
+				syncTimer.Reset(time.Second)
+				syncTick = syncTimer.C
+			}
+		} else if syncTick != nil {
+			syncTimer.Stop()
+			syncTick = nil
 		}
 		if tick == nil && a.dirty() {
 			flush.Reset(80 * time.Millisecond)
@@ -248,6 +270,10 @@ func (a *agent) reportError(err error) {
 // RPC waits still service tab lifecycle events. Other commands stay ordered
 // until the current request completes, without starting nested RPC calls.
 func (a *agent) handlePendingCommand(cmd command) {
+	if cmd.lifecycle != nil && cmd.lifecycle.Kind != peb.ProjectClosed {
+		a.processCommand(cmd)
+		return
+	}
 	if cmd.action && cmd.context.ProjectPath == a.context.ProjectPath {
 		a.reportError(a.openWorkspace(cmd.context))
 		return
@@ -260,6 +286,9 @@ func (a *agent) handlePendingCommand(cmd command) {
 		}
 	}
 	if a.pendingCount == len(a.pending) {
+		if cmd.reply != nil {
+			cmd.reply <- peb.LifecycleReply{Message: "Codex 事件队列已满，未能完成项目清理。"}
+		}
 		a.reportError(fmt.Errorf("Codex 事件队列已满"))
 		return
 	}
@@ -271,22 +300,12 @@ func (a *agent) dirty() bool {
 	return a.workspaceOpen && (a.workspaceDirty || a.historyDirty || a.selected != nil && a.selected.dirty)
 }
 
-// Release the previous conversation after any pending RPC returns. Drafts and
-// history remain available when the conversation is resumed later.
+// Switching or closing the view keeps live subscriptions and approvals intact.
 func (a *agent) selectConversation(c *conversation) {
 	a.dismissCompletion()
 	a.completion.dismissed = ""
-	if a.selected != c {
-		if previous := a.selected; previous != nil {
-			previous.exitRequested, a.exitsPending = true, true
-			if !previous.busy {
-				previous.items = nil
-				previous.files = nil
-				previous.loaded = false
-			}
-		}
-		a.selected = c
-	}
+	a.selected = c
+	a.markViewed(c)
 	a.workspaceDirty = true
 }
 
@@ -294,27 +313,7 @@ func (a *agent) closeWorkspace() error {
 	a.completion = composerCompletion{}
 	a.workspaceOpen, a.revealWorkspace = false, false
 	a.composerPrefix, a.composerBindings = "", nil
-	if a.client != nil {
-		a.exitsPending = true
-	}
-	a.selectConversation(nil)
-	for _, c := range a.conversations {
-		if !c.busy {
-			c.items = nil
-			c.files = nil
-			c.loaded = false
-		}
-	}
 	return a.closeComposerMenus()
-}
-
-func (a *agent) exitConversations() {
-	if !a.exitsPending {
-		return
-	}
-	a.exitsPending = false
-	// Disconnect only this subscriber. The shared daemon owns running turns.
-	a.closeClient()
 }
 
 func (a *agent) closeClient() {
@@ -329,7 +328,9 @@ func (a *agent) closeClient() {
 		c.finishProgress(turn{}, time.Now())
 		c.items, c.requests = nil, nil
 		c.files = nil
-		c.loaded, c.busy, c.exitRequested = false, false, false
+		c.loaded = false
+		c.observing = false
+		a.setBusy(c, false)
 		c.turnID = ""
 	}
 }
@@ -342,13 +343,15 @@ func (a *agent) disconnected() {
 	a.status = fmt.Sprintf("Codex 连接已断开：%v。重新发送或打开历史可重连。", err)
 	for _, c := range a.conversations {
 		c.finishProgress(turn{}, time.Now())
-		c.loaded, c.busy = false, false
+		c.loaded = false
+		c.observing = false
+		a.setBusy(c, false)
 		c.turnID = ""
 		c.requests = nil
 		c.status = a.status
 		c.dirty = true
 	}
-	a.workspaceDirty = true
+	a.workspaceDirty, a.historyDirty = true, true
 }
 
 func (a *agent) connect() error {
@@ -384,7 +387,8 @@ func (a *agent) connect() error {
 func (a *agent) openWorkspace(ctx peb.ActionContext) error {
 	err := a.setContext(ctx)
 	a.revealWorkspace = a.workspaceOpen
-	a.workspaceOpen, a.workspaceDirty = true, true
+	a.workspaceOpen, a.workspaceDirty, a.workspaceHidden = true, true, false
+	a.markViewed(a.selected)
 	if err != nil {
 		return err
 	}
@@ -394,6 +398,10 @@ func (a *agent) openWorkspace(ctx peb.ActionContext) error {
 }
 
 func (a *agent) handleCommand(cmd command) error {
+	if cmd.lifecycle != nil {
+		cmd.reply <- a.handleLifecycle(*cmd.lifecycle)
+		return nil
+	}
 	if cmd.title != nil {
 		return a.finishTitle(cmd.title)
 	}
@@ -410,7 +418,7 @@ func (a *agent) handleCommand(cmd command) error {
 			return err
 		}
 		if a.selected != nil && !a.selected.loaded {
-			if err := a.resume(a.selected.ID); err != nil {
+			if err := a.openConversation(a.selected.ID); err != nil {
 				return err
 			}
 		}
@@ -458,7 +466,11 @@ func (a *agent) handleCommand(cmd command) error {
 	case "close":
 		return a.closeWorkspace()
 	case "visibilitychange":
-		if e.Event.Value == "hidden" {
+		a.workspaceHidden = e.Event.Value == "hidden"
+		if !a.workspaceHidden {
+			a.markViewed(a.selected)
+		}
+		if a.workspaceHidden {
 			return a.closeComposerMenus()
 		}
 	case "input":
@@ -486,6 +498,9 @@ func (a *agent) handleCommand(cmd command) error {
 		return a.send()
 	case "click":
 		switch e.Event.Ref {
+		case "new":
+			a.selectConversation(nil)
+			return a.closeComposerMenus()
 		case "send":
 			return a.send()
 		case "stop":
@@ -557,7 +572,7 @@ func (a *agent) handleCommand(cmd command) error {
 				return nil
 			}
 			if id, ok := strings.CutPrefix(e.Event.Ref, "history/"); ok {
-				return a.resume(id)
+				return a.openConversation(id)
 			}
 			parts := strings.SplitN(e.Event.Ref, "/", 2)
 			if c != nil && len(parts) == 2 && (parts[0] == "accept" || parts[0] == "decline" || parts[0] == "answer") {
@@ -570,7 +585,6 @@ func (a *agent) handleCommand(cmd command) error {
 
 func (a *agent) startThread() (*conversation, error) {
 	a.selectConversation(nil)
-	a.exitConversations()
 	if err := a.connect(); err != nil {
 		return nil, err
 	}
@@ -594,11 +608,7 @@ func (a *agent) startThread() (*conversation, error) {
 	a.conversations[c.ID] = c
 	a.history.include(c.thread)
 	a.showHistory = true
-	if a.exitsPending {
-		c.exitRequested = true
-	} else {
-		a.selectConversation(c)
-	}
+	a.selectConversation(c)
 	return c, nil
 }
 
@@ -629,6 +639,9 @@ func (a *agent) send() error {
 		return nil
 	}
 	if c != nil && c.busy {
+		if c.observing {
+			return fmt.Errorf("任务正在其他客户端执行，请等待完成或在原客户端停止")
+		}
 		return fmt.Errorf("当前会话正在工作，请等待完成或点击停止")
 	}
 	if err := a.connect(); err != nil {
@@ -661,12 +674,8 @@ func (a *agent) send() error {
 	if c.busy {
 		return fmt.Errorf("当前会话仍有任务在运行，请等待完成或点击停止")
 	}
-	if !a.workspaceOpen || c.exitRequested {
-		a.selected = nil
-		return nil
-	}
 	// Show the stop action before waiting for turn/start to acknowledge the task.
-	c.busy, c.dirty = true, true
+	a.setBusy(c, true)
 	c.progress = &turnProgress{started: time.Now()}
 	c.files = newTurnFiles("", c.context.ProjectPath)
 	c.status = ""
@@ -689,11 +698,11 @@ func (a *agent) send() error {
 	}](a.client, "turn/start", params)
 	if err != nil {
 		c.finishProgress(turn{}, time.Now())
-		c.busy = false
+		a.setBusy(c, false)
 		c.dirty = true
 		return err
 	}
-	c.busy = c.busy && result.Turn.Status == "inProgress"
+	a.setBusy(c, c.busy && result.Turn.Status == "inProgress")
 	if c.busy {
 		c.turnID = result.Turn.ID
 		c.startProgress(result.Turn, time.Now())
@@ -708,14 +717,14 @@ func (a *agent) send() error {
 	}
 	a.status = ""
 	a.workspaceDirty, c.dirty = true, true
-	if c.Name == "" && c.titleJob == nil && !c.exitRequested {
+	if c.Name == "" && c.titleJob == nil {
 		a.generateTitle(c, attachmentPrompt(prompt, files))
 	}
 	return nil
 }
 
 func (a *agent) interrupt(c *conversation) error {
-	if c == nil || !c.busy || c.turnID == "" || a.client == nil {
+	if c == nil || c.observing || !c.busy || c.turnID == "" || a.client == nil {
 		return nil
 	}
 	_, err := call[json.RawMessage](a.client, "turn/interrupt", map[string]string{"threadId": c.ID, "turnId": c.turnID})
@@ -770,7 +779,6 @@ func (a *agent) resume(id string) error {
 			return err
 		}
 	}
-	a.exitConversations()
 	if err := a.connect(); err != nil {
 		return err
 	}
@@ -789,6 +797,7 @@ func (a *agent) resume(id string) error {
 			}
 		}()
 		p := a.permission()
+		revision := c.turnRevision
 		result, err := call[struct {
 			Thread thread `json:"thread"`
 		}](a.client, "thread/resume", struct {
@@ -816,23 +825,21 @@ func (a *agent) resume(id string) error {
 		}
 		resumed = true
 		c.thread = result.Thread
+		if c.turnRevision == revision {
+			a.setBusy(c, result.Thread.Status.Type == "active")
+		}
 		c.loaded = loaded
+		c.observing = !loaded
+		c.syncError, c.syncAfter = "", time.Time{}
+		c.observedTurn, c.observedStatus, c.observedDigest = "", "", [32]byte{}
 		c.status = ""
 		if !loaded {
-			c.status = "此会话由另一个 Codex 服务持有，当前仅查看历史。请连接同一共享服务，或在原服务释放会话后重新发送。"
-		}
-		if a.exitsPending {
-			c.exitRequested = true
-			return nil
+			c.status = externalSessionStatus
 		}
 		if err = a.readHistory(c); err != nil {
 			a.closeClient()
 			return err
 		}
-	}
-	if a.exitsPending {
-		c.exitRequested = true
-		return nil
 	}
 	a.history.include(c.thread)
 	a.showHistory = true
@@ -876,6 +883,11 @@ func (a *agent) readHistory(c *conversation) error {
 	}
 	var older []*chatItem
 	slices.Reverse(page.Data)
+	if c.observing && c.cursor == "" && len(page.Data) > 0 {
+		latest := &page.Data[len(page.Data)-1]
+		normalizeObservedTurn(latest)
+		c.observedTurn, c.observedStatus = latest.ID, latest.Status
+	}
 	for _, t := range page.Data {
 		files := c.turnFiles(t.ID)
 		if files == nil {
@@ -888,8 +900,8 @@ func (a *agent) readHistory(c *conversation) error {
 			progress = &turnProgress{}
 			progress.update(t, time.Now())
 		}
-		if c.loaded && t.Status == "inProgress" && c.turnRevision == revision {
-			c.busy = true
+		if (c.observing || c.loaded && (c.Status.Type == "" || c.Status.Type == "active")) && t.Status == "inProgress" && c.turnRevision == revision {
+			a.setBusy(c, true)
 			c.turnID = t.ID
 			c.startProgress(t, time.Now())
 			progress = c.progress
@@ -983,6 +995,18 @@ func (a *agent) onMessage(message envelope) {
 		}
 		return
 	}
+	if message.Method == "thread/status/changed" {
+		var event struct {
+			ThreadID string       `json:"threadId"`
+			Status   threadStatus `json:"status"`
+		}
+		if err := json.Unmarshal(message.Params, &event); err != nil {
+			fmt.Fprintln(stderrWriter, err)
+		} else {
+			a.updateThreadStatus(event.ThreadID, event.Status)
+		}
+		return
+	}
 	var event struct {
 		ThreadID   string          `json:"threadId"`
 		ItemID     string          `json:"itemId"`
@@ -1047,7 +1071,7 @@ func (a *agent) onMessage(message envelope) {
 		i.html = ""
 	case "turn/started":
 		c.turnRevision++
-		c.busy = true
+		a.setBusy(c, true)
 		c.status = ""
 		c.turnID = event.Turn.ID
 		c.startProgress(event.Turn, time.Now())
@@ -1058,12 +1082,15 @@ func (a *agent) onMessage(message envelope) {
 			c.files.ref = "changes/" + event.Turn.ID
 		}
 	case "turn/completed":
+		if event.Turn.Status == "completed" && (c != a.selected || !a.workspaceOpen || a.workspaceHidden) {
+			c.unread, a.historyDirty = true, true
+		}
 		c.finishProgress(event.Turn, time.Now())
 		if c.files != nil && !c.files.complete {
 			c.files.complete = true
 		}
 		c.turnRevision++
-		c.busy = false
+		a.setBusy(c, false)
 		c.turnID = ""
 		c.requests = nil
 		if event.Turn.Error != nil {
@@ -1071,11 +1098,6 @@ func (a *agent) onMessage(message envelope) {
 		}
 		if event.Turn.Status == "interrupted" {
 			c.status = "任务已停止"
-		}
-		if !a.workspaceOpen || c.exitRequested {
-			c.items = nil
-			c.files = nil
-			c.loaded = false
 		}
 	case "serverRequest/resolved":
 		c.requests = slices.DeleteFunc(c.requests, func(r *approval) bool { return string(r.id) == string(event.RequestID) })

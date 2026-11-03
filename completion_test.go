@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,35 @@ func TestMentionCompletionInsertsAtCaretAndAttachesFile(t *testing.T) {
 	a.updateCompletion(completionInput("@", 1))
 	if a.completion.count != 0 || len(a.completion.files) != 0 {
 		t.Fatal("project switch retained file candidates")
+	}
+}
+
+func TestCompletionDismissRestoresCaret(t *testing.T) {
+	for _, value := range []string{"/review", "请检查 @中文.go 后缀"} {
+		t.Run(value, func(t *testing.T) {
+			a := &agent{context: peb.ActionContext{ProjectPath: t.TempDir()}}
+			a.completion.skillsLoaded = true
+			caret := utf8.RuneCountInString(strings.TrimSuffix(value, " 后缀"))
+			event := completionInput(value, caret)
+			a.setDraft(value)
+			a.updateCompletion(event)
+			if a.completion.kind == 0 {
+				t.Fatal("completion did not open")
+			}
+			event.Kind, event.Data = "completion", "dismiss"
+			if err := a.handleCompletion(event); err != nil {
+				t.Fatal(err)
+			}
+			view := a.composerView()
+			validateBindings(t, view)
+			if a.draft() != value || strings.Contains(view.HTML, `role="listbox"`) || !strings.Contains(view.HTML, `data-pencode-caret="`+strconv.Itoa(caret)+`:`) {
+				t.Fatal("dismiss did not close suggestions and restore focus at the original caret", view.HTML)
+			}
+			a.updateCompletion(completionInput(value, caret))
+			if a.completion.kind != 0 {
+				t.Fatal("restoring focus reopened dismissed suggestions")
+			}
+		})
 	}
 }
 

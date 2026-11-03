@@ -241,19 +241,21 @@ func TestHistoryRestoresFileChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { a.client.close() }()
-	for range 2 {
+	for iteration := range 2 {
 		view := a.composerView()
 		validateBindings(t, view)
 		if strings.Count(view.HTML, `class="codex-changes"`) != 1 || !strings.Contains(view.HTML, "saved.go") || strings.Contains(view.HTML, "已处理") {
 			t.Fatal("history lost file changes or estimated an absent duration", view.HTML)
 		}
-		clickActivity(t, a, "change-file/old-turn/0")
+		if iteration == 0 {
+			clickActivity(t, a, "change-file/old-turn/0")
+		}
 		if !strings.Contains(a.composerView().HTML, "+stored") {
 			t.Fatal("restored diff did not open")
 		}
 		a.selectConversation(nil)
-		if a.conversations["saved"].files != nil || a.conversations["saved"].items != nil {
-			t.Fatal("leaving an idle conversation retained its diffs")
+		if len(a.conversations["saved"].items) == 0 {
+			t.Fatal("leaving a conversation lost its cached diffs")
 		}
 		if err := a.resume("saved"); err != nil {
 			t.Fatal(err)

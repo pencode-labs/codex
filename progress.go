@@ -67,15 +67,19 @@ func (a *agent) updateProgress(now time.Time) {
 }
 
 func (p *turnProgress) render(b *strings.Builder) {
+	thinking := !p.received && !p.complete
 	b.WriteString(`<div class="codex-turn-progress" role="status"`)
 	if p.id != "" {
 		b.WriteString(` data-ref="progress/`)
 		b.WriteString(html.EscapeString(p.id))
 		b.WriteString(`" data-pencode-region`)
 	}
+	if thinking {
+		b.WriteString(` aria-label="正在思考"`)
+	}
 	b.WriteString(`>`)
-	if !p.received && !p.complete {
-		b.WriteString("正在思考")
+	if thinking {
+		renderSweepText(b, "正在思考")
 	} else {
 		b.WriteString("已处理 ")
 		elapsed := p.elapsed

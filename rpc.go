@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -123,6 +124,11 @@ func connectServer(ctx context.Context, root, path, endpoint string) (*websocket
 	if endpoint == "" {
 		cmd := exec.CommandContext(ctx, path, "app-server", "daemon", "start")
 		cmd.Dir, cmd.Stderr, cmd.WaitDelay = root, stderrWriter, time.Second
+		if runtime.GOOS == "darwin" {
+			if shellPath := loginShellPATH(os.Getenv("SHELL")); shellPath != "" {
+				cmd.Env = appendPath(os.Environ(), shellPath)
+			}
+		}
 		hideWindow(cmd)
 		output, err := cmd.Output()
 		if err != nil {
@@ -161,6 +167,16 @@ func connectServer(ctx context.Context, root, path, endpoint string) (*websocket
 		return nil, fmt.Errorf("连接 Codex 共享服务：%w", err)
 	}
 	return conn, nil
+}
+
+func appendPath(environment []string, path string) []string {
+	for i, entry := range environment {
+		if strings.HasPrefix(entry, "PATH=") {
+			environment[i] = "PATH=" + path
+			return environment
+		}
+	}
+	return append(environment, "PATH="+path)
 }
 
 // Daemon startup can include installation; lifecycle events must remain responsive.

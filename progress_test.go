@@ -19,6 +19,18 @@ func TestTurnProgressLifecycle(t *testing.T) {
 				t.Helper()
 				a.onMessage(envelope{Method: method, Params: json.RawMessage(params)})
 			}
+			checkSweep := func(want bool) {
+				t.Helper()
+				view := a.composerView()
+				start := strings.LastIndex(view.HTML, `class="codex-turn-progress"`)
+				if start < 0 {
+					t.Fatal("missing turn progress", view.HTML)
+				}
+				progress, _, _ := strings.Cut(view.HTML[start:], `</div>`)
+				if strings.Contains(progress, `class="codex-sweep-text"`) != want {
+					t.Fatal("only the thinking progress should sweep", progress)
+				}
+			}
 			notify("turn/started", `{"threadId":"thread","turn":{"id":"one","status":"inProgress"}}`)
 			notify("item/started", `{"threadId":"thread","item":{"id":"user","type":"userMessage","content":[{"type":"text","text":"任务"}]}}`)
 			notify("item/started", `{"threadId":"thread","item":{"id":"reply","type":"agentMessage"}}`)
@@ -26,10 +38,12 @@ func TestTurnProgressLifecycle(t *testing.T) {
 			if !strings.Contains(view.HTML, "正在思考") || strings.Contains(view.HTML, "已处理") || a.progressVisible() {
 				t.Fatal("empty item must keep thinking without starting the update timer", view.HTML)
 			}
+			checkSweep(true)
 			notify(method, `{"threadId":"thread","itemId":"reply","delta":""}`)
 			if c.progress.received {
 				t.Fatal("empty delta was counted as the first token")
 			}
+			checkSweep(true)
 			c.progress.started = time.Now().Add(-112 * time.Second)
 			notify(method, `{"threadId":"thread","itemId":"reply","delta":"回复"}`)
 			view = a.composerView()
@@ -37,6 +51,7 @@ func TestTurnProgressLifecycle(t *testing.T) {
 			if strings.Contains(view.HTML, "正在思考") || strings.Count(view.HTML, "已处理 1分钟 52秒") != 1 || !a.progressVisible() {
 				t.Fatal("first token did not replace thinking with elapsed time", view.HTML)
 			}
+			checkSweep(false)
 			if strings.Index(view.HTML, "任务") > strings.Index(view.HTML, `class="codex-turn-progress"`) || strings.Index(view.HTML, `class="codex-turn-progress"`) > strings.Index(view.HTML, `aria-label="Codex"`) {
 				t.Fatal("progress must follow the user message and precede the reply", view.HTML)
 			}
@@ -48,12 +63,14 @@ func TestTurnProgressLifecycle(t *testing.T) {
 			if !strings.Contains(a.composerView().HTML, "已处理 2分钟 5秒") {
 				t.Fatal("completed elapsed time changed")
 			}
+			checkSweep(false)
 			first := c.progress
 			notify("turn/started", `{"threadId":"thread","turn":{"id":"two","status":"inProgress"}}`)
 			view = a.composerView()
 			if c.progress == first || strings.Count(view.HTML, `class="codex-turn-progress"`) != 2 || !strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "已处理 2分钟 5秒") {
 				t.Fatal("new turn must preserve the previous turn's duration", view.HTML)
 			}
+			checkSweep(true)
 		})
 	}
 }

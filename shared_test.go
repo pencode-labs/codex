@@ -150,7 +150,7 @@ func TestSharedSessionSurvivesClientCloseAndReconnect(t *testing.T) {
 	if err := a.closeWorkspace(); err != nil {
 		t.Fatal(err)
 	}
-	a.exitConversations()
+	a.closeClient()
 	syncEvents(b)
 	mutex.Lock()
 	stillRunning := running
@@ -232,7 +232,7 @@ func TestLiveSharedAppServer(t *testing.T) {
 	if err = second.closeWorkspace(); err != nil {
 		t.Fatal(err)
 	}
-	second.exitConversations()
+	second.closeClient()
 	second.workspaceOpen = true
 	if err = second.resume(id); err != nil || !second.selected.loaded || second.selected.draft != "keep draft" {
 		t.Fatal("new connection could not resume the same session", err)
@@ -300,7 +300,7 @@ func TestLiveSharedRunningTurn(t *testing.T) {
 	if err = a.closeWorkspace(); err != nil {
 		t.Fatal(err)
 	}
-	a.exitConversations()
+	a.closeClient()
 	select {
 	case <-inferenceEnded:
 		t.Fatal("closing the first view stopped inference")

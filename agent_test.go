@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -419,24 +418,18 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	ctx := peb.ActionContext{ID: "chat", ProjectPath: t.TempDir()}
 	id := uint32(1)
 	action := func() { id++; data, _ := peb.EncodeActionContext(nil, ctx); write(peb.ActionInvoke, id, data) }
-	scope, nextTab := "", 1
 	event := func(surface, kind, ref, value string) {
 		id++
 		caret := uint32(utf8.RuneCountInString(value))
-		data, err := peb.EncodeUIEvent(nil, peb.UIEvent{ID: scope + surface, Context: ctx, Event: peb.EditorEvent{Kind: kind, Ref: ref, Value: value, Anchor: caret, Focus: caret}})
+		data, err := peb.EncodeUIEvent(nil, peb.UIEvent{ID: surface, Context: ctx, Event: peb.EditorEvent{Kind: kind, Ref: ref, Value: value, Anchor: caret, Focus: caret}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		write(peb.UIRequest, id, data)
-		if surface == "composer" && kind == "click" && ref == "new" {
-			scope = strconv.Itoa(nextTab) + "-"
-			nextTab++
-		}
 	}
 	var views peb.ViewReceiver
 	waitUI := func(surface, contains string) peb.UI {
 		t.Helper()
-		surface = scope + surface
 		deadline := time.After(10 * time.Second)
 		for {
 			select {
@@ -460,11 +453,6 @@ func TestAgentPEBWorkflow(t *testing.T) {
 					t.Fatal(err)
 				}
 				local := ui.ID
-				if prefix, rest, ok := strings.Cut(local, "-"); ok {
-					if _, err := strconv.Atoi(prefix); err == nil {
-						local = rest
-					}
-				}
 				if ui.Kind == peb.Panel || local != "composer" && local != "models" && local != "permissions" && local != "files" && local != "rename" && local != "error" {
 					t.Fatal("chat opened an extra surface", ui)
 				}
@@ -676,21 +664,15 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	waitUI("composer", `codex-model-effort">低</span>`)
 	event("composer", "input", "prompt", "original tab draft")
 	addFile(attachment)
-	originalScope := scope
 	event("composer", "click", "new", "")
-	newScope := scope
-	if fresh := waitUI("composer", "新会话"); fresh.ID == originalScope+"composer" || strings.Contains(fresh.View.HTML, "original tab draft") || strings.Contains(fresh.View.HTML, `data-ref="remove-file/0"`) {
-		t.Fatal("new session replaced the old tab or inherited its draft", fresh)
+	if fresh := waitUI("composer", "新会话"); fresh.ID != "composer" || strings.Contains(fresh.View.HTML, "original tab draft") || strings.Contains(fresh.View.HTML, `data-ref="remove-file/0"`) {
+		t.Fatal("new session replaced the workspace or inherited its draft", fresh)
 	}
-	scope = originalScope
-	event("composer", "visibilitychange", "", "visible")
-	action()
+	event("composer", "click", "history/thread1", "")
 	if previous := waitUI("composer", "original tab draft"); !strings.Contains(previous.View.HTML, "Final reply") || !strings.Contains(previous.View.HTML, `data-ref="remove-file/0"`) {
-		t.Fatal("opening a new tab lost the original transcript or attachments", previous)
+		t.Fatal("switching sessions lost the transcript or attachments", previous)
 	}
-	scope = newScope
-	event("composer", "visibilitychange", "", "visible")
-	action()
+	event("composer", "click", "new", "")
 	waitUI("composer", "新会话")
 	event("composer", "input", "prompt", "wait")
 	event("composer", "click", "model-settings", "")
@@ -716,11 +698,10 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	action()
 	waitUI("composer", "给 Codex 的任务")
 	event("composer", "click", "history", "")
-	waitUI("composer", "Saved task")
+	waitUI("composer", "历史标题")
 	event("composer", "click", "history/saved", "")
 	waitUI("composer", "Stored conversation")
-	// Closing exits the conversation even while history is slow; it remains
-	// available in history and retains its draft when explicitly resumed.
+	// Closing preserves the conversation even while history is slow.
 	if err := os.Remove(historyGate); err != nil {
 		t.Fatal(err)
 	}
@@ -741,8 +722,8 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	}
 	event("composer", "close", "", "")
 	action()
-	if ui := waitUI("composer", "给 Codex 的任务"); strings.Contains(ui.View.HTML, "Stored conversation") || ui.Busy {
-		t.Fatal("reopening retained the exited conversation", ui)
+	if ui := waitUI("composer", "给 Codex 的任务"); !strings.Contains(ui.View.HTML, "Stored conversation") || ui.Busy {
+		t.Fatal("reopening lost the previous conversation", ui)
 	}
 	if err := os.WriteFile(historyGate, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -813,33 +794,35 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if ui := waitUI("permissions", ""); !ui.Close {
 		t.Fatal("hidden composer left permission menu open")
 	}
-	// Creating a tab must preserve another tab's active turn and draft.
+	// A new conversation keeps the previous task running in the background.
 	event("composer", "input", "prompt", "running tab draft")
-	runningScope := scope
+	running := waitUI("composer", "running tab draft")
+	match := regexp.MustCompile(`data-ref="history/([^" ]+)" aria-current="true"`).FindStringSubmatch(running.View.HTML)
+	if len(match) != 2 {
+		t.Fatal("running conversation is missing from history")
+	}
 	event("composer", "click", "new", "")
-	idleScope := scope
 	waitUI("composer", "新会话")
 	event("composer", "input", "prompt", "independent draft")
 	event("composer", "click", "permission-settings", "")
-	if menu := waitUI("permissions", "完全访问权限"); menu.Anchor != "ui:"+idleScope+"composer#permission-settings" {
-		t.Fatal("new tab menu is anchored to another tab", menu)
+	if menu := waitUI("permissions", "完全访问权限"); menu.Anchor != "ui:composer#permission-settings" {
+		t.Fatal("menu has incorrect anchor", menu)
 	}
 	event("composer", "visibilitychange", "", "hidden")
 	waitUI("permissions", "")
-	scope = runningScope
 	event("composer", "visibilitychange", "", "visible")
-	action()
+	event("composer", "click", "history/"+match[1], "")
 	if running := waitUI("composer", "running tab draft"); !running.Busy {
 		t.Fatal("new session interrupted the original task", running)
 	}
 	event("composer", "click", "stop", "")
 	waitUI("composer", "任务已停止")
 	event("composer", "close", "", "")
-	scope = idleScope
-	event("composer", "visibilitychange", "", "visible")
 	action()
+	waitUI("composer", "running tab draft")
+	event("composer", "click", "new", "")
 	if idle := waitUI("composer", "independent draft"); idle.Busy || strings.Contains(idle.View.HTML, "任务已停止") {
-		t.Fatal("closing another tab changed the new session", idle)
+		t.Fatal("closing lost the new session draft", idle)
 	}
 	// Menu selections must reach disk and restore without this agent's state.
 	restarted := &agent{}

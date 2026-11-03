@@ -62,6 +62,9 @@ func TestHistoryRefreshRetainsPublishedChat(t *testing.T) {
 	c := &conversation{thread: thread{ID: "active"}, draft: "draft"}
 	a := &agent{selected: c, showHistory: true, history: threadPage{Data: []thread{{ID: "saved", Name: "Saved task"}}}}
 	initial := a.composerView()
+	if !strings.Contains(initial.HTML, `data-ref="transcript" data-pencode-selectable`) {
+		t.Fatal("transcript is not selectable")
+	}
 	prefix := a.composerPrefix
 	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "input", Ref: "prompt", Value: "draft still being typed"}}}); err != nil {
 		t.Fatal(err)

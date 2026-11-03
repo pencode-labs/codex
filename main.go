@@ -11,11 +11,13 @@ import (
 )
 
 type command struct {
-	title    *titleJob
-	action   bool
-	settings peb.SettingValues
-	context  peb.ActionContext
-	event    peb.UIEvent
+	lifecycle *peb.LifecycleEvent
+	reply     chan peb.LifecycleReply
+	title     *titleJob
+	action    bool
+	settings  peb.SettingValues
+	context   peb.ActionContext
+	event     peb.UIEvent
 }
 
 func main() {
@@ -26,7 +28,7 @@ func main() {
 }
 
 func serveAgent(input io.Reader, output io.Writer) error {
-	app := workspaceHost{tabs: make(map[string]*workspaceTab)}
+	app := workspaceHost{}
 	defer app.close()
 	return peb.ServeExtension(input, output, peb.Contributions{
 		Settings: []peb.Setting{{ID: "executablePath", Label: "Codex 可执行文件路径", Type: peb.SettingString, Default: json.RawMessage(`""`),
@@ -35,7 +37,8 @@ func serveAgent(input io.Reader, output io.Writer) error {
 				Description: "留空自动启动或复用 Codex daemon。也可填写 ws://、wss:// 地址或 unix://绝对路径。修改后下次连接生效。"}},
 		Actions: []peb.Action{{ID: "chat", Tooltip: "Codex Agent", Icon: "resources/icons/chatgpt.svg", Location: peb.StatusBar}},
 	}, peb.Handlers{
-		Settings: app.configure,
+		Settings:  app.configure,
+		Lifecycle: app.lifecycle,
 		ActivateActions: func(ctx context.Context, p *peb.ActionPublisher) {
 			app.ctx, app.publisher = ctx, p
 		},

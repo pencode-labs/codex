@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/pencode-labs/pencode/peb"
 )
@@ -24,7 +26,7 @@ func resolveExecutablePath(root, path string) (string, error) {
 		path = strings.TrimSpace(os.Getenv("PENCODE_CODEX_PATH"))
 	}
 	if path == "" {
-		return "codex", nil
+		path = "codex"
 	}
 	path = filepath.FromSlash(path)
 	if path == "~" || strings.HasPrefix(path, "~"+string(filepath.Separator)) {
@@ -36,6 +38,13 @@ func resolveExecutablePath(root, path string) (string, error) {
 	}
 	if !filepath.IsAbs(path) {
 		if !strings.ContainsRune(path, filepath.Separator) {
+			if runtime.GOOS == "darwin" {
+				if _, err := exec.LookPath(path); err != nil {
+					if executable := loginShellExecutable(path); executable != "" {
+						return executable, nil
+					}
+				}
+			}
 			return path, nil
 		}
 		path = filepath.Join(root, path)
@@ -52,6 +61,48 @@ func resolveExecutablePath(root, path string) (string, error) {
 		return executable, nil
 	}
 	return path, nil
+}
+
+const (
+	loginShellPathStart = "__PENCODE_PATH_START__"
+	loginShellPathEnd   = "__PENCODE_PATH_END__"
+)
+
+func loginShellPATH(shell string) string {
+	if shell == "" {
+		shell = "/bin/zsh"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := fmt.Sprintf("printf '%s%%s%s' \"$PATH\"", loginShellPathStart, loginShellPathEnd)
+	output, err := exec.CommandContext(ctx, shell, "-ilc", command).Output()
+	if err != nil {
+		return ""
+	}
+	_, value, ok := strings.Cut(string(output), loginShellPathStart)
+	if !ok {
+		return ""
+	}
+	value, _, ok = strings.Cut(value, loginShellPathEnd)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func loginShellExecutable(name string) string {
+	path := loginShellPATH(os.Getenv("SHELL"))
+	for _, directory := range filepath.SplitList(path) {
+		if directory == "" {
+			directory = "."
+		}
+		candidate := filepath.Join(directory, name)
+		info, err := os.Stat(candidate)
+		if err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func (a *agent) setContext(ctx peb.ActionContext) error {

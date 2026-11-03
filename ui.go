@@ -30,10 +30,10 @@ func (a *agent) flush() {
 	if !a.dirty() {
 		return
 	}
-	title, busy := "Codex 新会话", false
+	title, busy, unread := "Codex 新会话", false, false
 	if a.selected != nil {
 		title = a.selected.title()
-		busy = a.selected.busy
+		busy, unread = a.selected.busy, a.selected.unread
 	}
 	var view *peb.EditorView
 	if a.composerPrefix == "" || a.workspaceDirty || a.selected != nil && a.selected.dirty {
@@ -41,12 +41,12 @@ func (a *agent) flush() {
 	} else {
 		view = a.historyView()
 	}
-	if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, View: view, Busy: busy}); err != nil {
+	if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, View: view, Busy: busy, Unread: unread}); err != nil {
 		fmt.Fprintln(stderrWriter, err)
 		return
 	}
 	if a.revealWorkspace {
-		if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, Busy: busy}); err != nil {
+		if err := a.publisher.Show(peb.UI{ID: "composer", Title: title, Kind: peb.EditorTab, Context: a.context, Busy: busy, Unread: unread}); err != nil {
 			fmt.Fprintln(stderrWriter, err)
 			return
 		}
@@ -61,7 +61,7 @@ func (a *agent) flush() {
 func (a *agent) composerView() *peb.EditorView {
 	var b strings.Builder
 	bindings := make([]peb.EditorBinding, 0, 16)
-	b.WriteString(`<main class="codex-workspace" data-pencode-layout="fill"><section class="codex-chat-pane"><div class="codex-transcript" data-ref="transcript" data-pencode-scroll="end" data-pencode-scroll-key="`)
+	b.WriteString(`<main class="codex-workspace" data-pencode-layout="fill"><section class="codex-chat-pane"><div class="codex-transcript" data-ref="transcript" data-pencode-selectable data-pencode-scroll="end" data-pencode-scroll-key="`)
 	if a.selected != nil {
 		b.WriteString(html.EscapeString(a.selected.ID))
 	}
@@ -83,9 +83,7 @@ func (a *agent) composerView() *peb.EditorView {
 		a.selected.files.prepareLive()
 		b.WriteString(a.selected.files.liveHTML)
 	}
-	b.WriteString(`<form id="pencode-extension-codex-`)
-	b.WriteString(a.uiScope)
-	b.WriteString(`form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
+	b.WriteString(`<form id="pencode-extension-codex-form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`">`)
 	files := a.attachments[a.attachmentScope()]
@@ -123,17 +121,11 @@ func (a *agent) composerView() *peb.EditorView {
 		}
 		b.WriteString(`</div>`)
 	}
-	b.WriteString(`<textarea id="pencode-extension-codex-`)
-	b.WriteString(a.uiScope)
-	b.WriteString(`prompt" data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form"`)
+	b.WriteString(`<textarea id="pencode-extension-codex-prompt" data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form"`)
 	if a.completion.kind != 0 {
-		b.WriteString(` data-pencode-completion="true" aria-expanded="true" aria-controls="pencode-extension-codex-`)
-		b.WriteString(a.uiScope)
-		b.WriteString(`completion-list" aria-autocomplete="list"`)
+		b.WriteString(` data-pencode-completion="true" aria-expanded="true" aria-controls="pencode-extension-codex-completion-list" aria-autocomplete="list"`)
 		if a.completion.count != 0 {
-			b.WriteString(` aria-activedescendant="pencode-extension-codex-`)
-			b.WriteString(a.uiScope)
-			b.WriteString(`completion-option-`)
+			b.WriteString(` aria-activedescendant="pencode-extension-codex-completion-option-`)
 			b.WriteString(strconv.Itoa(a.completion.selected))
 			b.WriteByte('"')
 		}
@@ -174,7 +166,9 @@ func (a *agent) composerView() *peb.EditorView {
 		b.WriteString(`</span>`)
 	}
 	b.WriteString(`<img src="resources/icons/chevron-down.svg" alt=""></button>`)
-	if busy {
+	if busy && a.selected.observing {
+		b.WriteString(`<button class="codex-icon-button codex-send" type="button" disabled title="任务正在其他客户端执行，请在原客户端停止" aria-label="正在其他客户端执行"><img src="resources/icons/square.svg" alt=""></button>`)
+	} else if busy {
 		b.WriteString(`<button data-ref="stop" class="codex-icon-button codex-send" type="button" title="停止任务" aria-label="停止任务"><img src="resources/icons/square.svg" alt=""></button>`)
 	} else {
 		b.WriteString(`<button data-ref="send" class="codex-icon-button codex-send" type="button" title="发送" aria-label="发送"><img src="resources/icons/arrow-up.svg" alt=""></button>`)
@@ -186,14 +180,17 @@ func (a *agent) composerView() *peb.EditorView {
 	if a.selected != nil && a.selected.status != "" {
 		status = a.selected.status
 	}
+	if a.selected != nil && a.selected.syncError != "" {
+		status = a.selected.syncError
+	}
 	if status != "" {
 		b.WriteString(`<p class="codex-status" role="status">`)
 		b.WriteString(html.EscapeString(status))
 		b.WriteString(`</p>`)
 	}
-	if busy {
+	if busy && !a.selected.observing {
 		bindings = append(bindings, peb.EditorBinding{Ref: "stop", Kind: "click"})
-	} else {
+	} else if !busy {
 		bindings = append(bindings, peb.EditorBinding{Ref: "send", Kind: "click"})
 	}
 	b.WriteString(`</section></section><aside class="codex-sidebar" aria-label="历史会话"><section class="codex-history">`)
@@ -235,7 +232,14 @@ func (a *agent) historyView() *peb.EditorView {
 			b.WriteString(html.EscapeString(title))
 			b.WriteString(`</button>`)
 			renameRef := "rename/" + t.ID
-			b.WriteString(`<div class="codex-history-actions"><button class="codex-icon-button" type="button" data-ref="`)
+			b.WriteString(`<div class="codex-history-actions">`)
+			c := a.conversations[t.ID]
+			if c != nil && c.busy || c == nil && t.Status.Type == "active" {
+				b.WriteString(`<span class="codex-history-running" role="status" aria-label="会话运行中" title="会话运行中"></span>`)
+			} else if c != nil && c.unread {
+				b.WriteString(`<span class="codex-history-unread" role="status" aria-label="会话已完成，尚未查看" title="会话已完成，尚未查看"></span>`)
+			}
+			b.WriteString(`<button class="codex-icon-button" type="button" data-ref="`)
 			b.WriteString(html.EscapeString(renameRef))
 			b.WriteString(`" title="修改会话标题" aria-label="修改会话标题" aria-haspopup="dialog"><img src="resources/icons/pencil.svg" alt=""></button></div></div>`)
 			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"}, peb.EditorBinding{Ref: renameRef, Kind: "click"})
@@ -266,12 +270,28 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 	if len(c.items) == 0 && c.progress == nil {
 		b.WriteString(`<div class="codex-empty"><h2>与 Codex 一起工作</h2><p>回复、命令执行和文件修改会显示在这里。</p></div>`)
 	}
+	latestActivity := -1
+	if c.busy && len(c.requests) == 0 {
+		for index := len(c.items) - 1; index >= 0; index-- {
+			if c.items[index].data.Type == "userMessage" {
+				break
+			}
+			if c.items[index].activityKinds() != 0 {
+				latestActivity = index
+				break
+			}
+		}
+	}
 	// Render only changed items. Reserve room for approvals and keep the latest
 	// messages visible even when an old command produced a large amount of output.
 	start, size := len(c.items), 0
 	var files *turnFiles
 	for start > 0 {
 		i := c.items[start-1]
+		if sweep := start-1 == latestActivity; i.sweep != sweep {
+			i.sweep = sweep
+			i.html = ""
+		}
 		if i.files != files {
 			files = i.files
 			files.prepare()
@@ -297,18 +317,6 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 	}
 	if start > 0 {
 		b.WriteString(`<p class="codex-muted">较早输出已折叠，完整记录保存在 Codex 会话中。</p>`)
-	}
-	latestActivity := -1
-	if c.busy && len(c.requests) == 0 {
-		for index := len(c.items) - 1; index >= start; index-- {
-			if c.items[index].data.Type == "userMessage" {
-				break
-			}
-			if c.items[index].activityKinds() != 0 {
-				latestActivity = index
-				break
-			}
-		}
 	}
 	var progress *turnProgress
 	files = nil
@@ -418,7 +426,13 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 		b.WriteString(`<img src="resources/icons/`)
 		b.WriteString(icon)
 		b.WriteString(`.svg" alt=""><span>`)
-		i.renderActivityLabel(b, label)
+		if i.sweep {
+			var text strings.Builder
+			i.renderActivityLabel(&text, label)
+			renderSweepText(b, html.UnescapeString(text.String()))
+		} else {
+			i.renderActivityLabel(b, label)
+		}
 		b.WriteString(`</span>`)
 		renderActivityStatus(b, i.data.Status)
 		if i.detailRef != "" {
