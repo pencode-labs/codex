@@ -22,7 +22,12 @@ import (
 
 func TestMain(m *testing.M) {
 	if os.Getenv("PENCODE_CODEX_FIXTURE") == "1" && len(os.Args) > 1 && os.Args[1] == "app-server" {
-		if len(os.Args) > 2 && os.Args[2] == "fixture-listen" {
+		if len(os.Args) > 3 && os.Args[2] == "daemon" && os.Args[3] == "start" {
+			if err := fixtureDaemonStart(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+		} else if len(os.Args) > 2 && os.Args[2] == "fixture-listen" {
 			path, _ := os.Executable()
 			server, closeServer := fixtureWebSocket(context.Background(), path)
 			defer closeServer()
@@ -71,6 +76,7 @@ func fixtureServer() {
 			notify("item/completed", map[string]any{"threadId": active, "item": map[string]any{"id": "cmd", "type": "commandExecution", "command": "go test ./...", "status": "completed", "aggregatedOutput": "tests passed"}})
 			notify("item/agentMessage/delta", map[string]string{"threadId": active, "itemId": "reply", "delta": "Streamed "})
 			notify("item/agentMessage/delta", map[string]string{"threadId": active, "itemId": "reply", "delta": "reply"})
+			fixtureWait("PENCODE_CODEX_LIVE_CHANGES_GATE")
 			notify("item/completed", map[string]any{"threadId": active, "item": map[string]string{"id": "reply", "type": "agentMessage", "text": "**Final reply** " + decision.Decision}})
 			notify("turn/completed", map[string]any{"threadId": active, "turn": map[string]string{"id": "turn1", "status": "completed"}})
 			continue
@@ -288,11 +294,6 @@ func fixtureServer() {
 				notify("turn/completed", map[string]any{"threadId": p.ThreadID, "turn": map[string]string{"id": "title-turn", "status": status}})
 				continue
 			}
-			if os.Getenv("PENCODE_CODEX_REQUIRE_SKILL") == "1" {
-				if len(p.Input) != 2 || p.Input[1].Type != "skill" || p.Input[1].Name != "fixture-review" || !filepath.IsAbs(p.Input[1].Path) || !strings.Contains(p.Input[0].Text, "[$fixture-review](") {
-					os.Exit(13)
-				}
-			}
 			if len(p.Input) > 0 && p.Input[0].Text == "implement feature" && (p.Model != "fixture-luna" || p.Effort != "high") {
 				os.Exit(5)
 			}
@@ -301,7 +302,7 @@ func fixtureServer() {
 			text := ""
 			if len(p.Input) > 0 {
 				text = p.Input[0].Text
-				for strings.HasPrefix(text, "[$") {
+				for strings.HasPrefix(text, "[fixture-review](") {
 					_, text, _ = strings.Cut(text, "\n")
 				}
 			}
@@ -314,6 +315,9 @@ func fixtureServer() {
 			notify("item/completed", map[string]any{"threadId": active, "item": map[string]any{"id": "user", "type": "userMessage", "content": p.Input}})
 			if len(p.Input) > 0 && p.Input[0].Text == "wait" {
 				continue
+			}
+			if os.Getenv("PENCODE_CODEX_LIVE_CHANGES_GATE") != "" {
+				notify("item/completed", map[string]any{"threadId": active, "item": threadItem{ID: "edit", Type: "fileChange", Status: "completed", Changes: []change{{Path: "edited.go", Diff: "+new\n-old\n"}}}})
 			}
 			notify("item/started", map[string]any{"threadId": active, "item": map[string]string{"id": "cmd", "type": "commandExecution", "command": "go test ./...", "status": "inProgress"}})
 			send(map[string]any{"id": 100, "method": "item/commandExecution/requestApproval", "params": map[string]string{"threadId": active, "turnId": "turn1", "itemId": "cmd", "command": "go test ./...", "reason": "fixture approval"}})
@@ -641,6 +645,8 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("composer", "click", "rename/saved", "")
 	waitUI("rename", `value="历史标题"`)
 	event("rename", "click", "rename-cancel", "")
+	event("composer", "click", "turn/turn1", "")
+	waitUI("composer", `data-ref="activity/cmd"`)
 	event("composer", "click", "activity/cmd", "")
 	waitUI("composer", `data-ref="item/cmd" aria-expanded="false"`)
 	event("composer", "click", "item/cmd", "")
@@ -736,8 +742,10 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("composer", "input", "prompt", "/fixture-r")
 	waitUI("composer", ">fixture-review</span>")
 	event("composer", "click", "completion/0", "")
-	waitUI("composer", `data-ref="remove-skill/0"`)
-	event("composer", "input", "prompt", "fail")
+	skillLink := "[fixture-review](" + filepath.ToSlash(filepath.Join(ctx.ProjectPath, "skills", "fixture-review", "SKILL.md")) + ")"
+	waitUI("composer", skillLink)
+	failedDraft := skillLink + "\nfail"
+	event("composer", "input", "prompt", failedDraft)
 	addFile(attachment)
 	event("composer", "click", "send", "")
 	if notice := waitUI("error", "fixture failure"); notice.Kind != peb.Notification || notice.Severity != peb.NotificationError || notice.Context.ProjectPath != ctx.ProjectPath {
@@ -751,21 +759,14 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if !strings.Contains(ui.View.HTML, "Thread permissions: never/user/danger-full-access; Turn permissions: never/user/dangerFullAccess") {
 		t.Fatal("resumed turn lost full access", ui.View.HTML)
 	}
-	if !strings.Contains(ui.View.HTML, ">fail</textarea>") {
+	if !strings.Contains(ui.View.HTML, html.EscapeString(failedDraft)+"</textarea>") {
 		t.Fatal("failed request lost the draft")
 	}
 	if !strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
 		t.Fatal("failed request lost the attachment")
 	}
-	if !strings.Contains(ui.View.HTML, `data-ref="remove-skill/0"`) || !strings.Contains(ui.View.HTML, ">Fixture Review</span>") || strings.Contains(ui.View.HTML, "[$fixture-review]") {
-		t.Fatal("failed request lost the skill chip or exposed its Markdown", ui.View.HTML)
-	}
-	event("composer", "click", "remove-skill/0", "")
-	if ui := waitUI("composer", ">fail</textarea>"); strings.Contains(ui.View.HTML, `data-ref="remove-skill/0"`) {
-		t.Fatal("skill removal failed", ui.View.HTML)
-	}
 	event("composer", "click", "remove-file/0", "")
-	if ui := waitUI("composer", ">fail</textarea>"); strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
+	if ui := waitUI("composer", html.EscapeString(failedDraft)+"</textarea>"); strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
 		t.Fatal("attachment removal failed", ui.View.HTML)
 	}
 	// Downgrading a loaded conversation must replace its full-access turn policy.
@@ -1029,6 +1030,7 @@ func TestLiveAppServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	a := &agent{ctx: ctx, context: peb.ActionContext{ProjectPath: t.TempDir()}, conversations: make(map[string]*conversation)}
+	liveAppServer(t, a.context.ProjectPath, "")
 	if err := a.loadModels(); err != nil {
 		t.Fatal("model list unavailable", err)
 	}

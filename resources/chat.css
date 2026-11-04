@@ -14,13 +14,14 @@
 .codex-composer input { width: 180px; padding: 4px 8px; }
 .codex-composer { position: relative; min-width: 0; }
 .codex-live-changes { display: flex; justify-content: center; margin-bottom: 8px; }
-.codex-live-changes-anchor { position: relative; display: flex; justify-content: center; max-width: 100%; }
+.codex-live-changes-anchor { position: relative; display: flex; justify-content: center; width: 100%; }
 .codex-composer .codex-live-changes-pill { display: flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 16px; color: var(--vscode-descriptionForeground); background: var(--vscode-editorWidget-background); font-family: ui; font-size: 13px; white-space: nowrap; }
-.codex-live-changes-popover { visibility: hidden; pointer-events: none; position: absolute; bottom: 100%; left: 50%; z-index: 9; width: 320px; max-width: calc(100vw - 32px); padding-bottom: 6px; transform: translateX(-50%); }
+.codex-live-changes-popover { visibility: hidden; pointer-events: none; position: absolute; bottom: 100%; left: 50%; z-index: 9; max-width: calc(100% - 16px); padding-bottom: 6px; transform: translateX(-50%); }
 .codex-live-changes-anchor:hover .codex-live-changes-popover, .codex-live-changes-anchor:focus-within .codex-live-changes-popover { visibility: visible; pointer-events: auto; }
 .codex-live-changes-list { max-height: 240px; overflow: auto; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 14px; color: var(--vscode-editor-foreground); background: var(--vscode-editorWidget-background); scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
-.codex-live-change { display: flex; align-items: center; gap: 16px; padding: 8px 10px; }
-.codex-live-change .codex-change-path { flex: 1; }
+.codex-live-changes-list > div { display: flex; }
+.codex-composer .codex-live-change { display: flex; flex: 1; min-width: 0; align-items: center; gap: 12px; padding: 6px 10px; border-radius: 6px; color: var(--vscode-editor-foreground); background: transparent; font: inherit; text-align: left; }
+.codex-composer .codex-live-change:hover { background: var(--vscode-list-hoverBackground); }
 .codex-completion { position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 10; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 12px; background: var(--vscode-editorWidget-background); }
 .codex-completion-list { max-height: 280px; overflow: auto; }
 .codex-completion-heading { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px 6px; color: var(--vscode-descriptionForeground); font-size: 11px; }
@@ -57,15 +58,14 @@
 .codex-composer .codex-send { border-radius: 50%; background: #a8a8a8; }
 .codex-composer .codex-send:hover { background: #d4d4d4; }
 .codex-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.codex-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+.codex-composer .codex-image { position: relative; display: flex; align-items: center; justify-content: center; width: 80px; height: 64px; padding: 4px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-input-border); border-radius: 6px; }
+.codex-image img { max-width: 70px; max-height: 54px; object-fit: contain; }
+.codex-image > span { position: absolute; top: 0; right: 2px; color: var(--vscode-input-foreground); background: var(--vscode-editorWidget-background); border-radius: 3px; padding: 0 3px; }
+.codex-message-image { max-width: 160px; max-height: 160px; object-fit: contain; border-radius: 6px; }
 .codex-composer .codex-attachment { display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 3px 8px; color: var(--vscode-input-foreground); background: var(--vscode-editorWidget-background); font-size: 12px; }
 .codex-attachment > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .codex-attachment > span:last-child { flex-shrink: 0; color: var(--vscode-descriptionForeground); }
-.codex-skills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.codex-composer .codex-skill { display: flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 4px; border-radius: 4px; color: var(--vscode-textLink-foreground); background: transparent; font-family: ui; font-size: 14px; }
-.codex-composer .codex-skill:hover { background: var(--vscode-toolbar-hoverBackground); }
-.codex-skill img { flex-shrink: 0; width: 14px; height: 14px; }
-.codex-skill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.codex-skill .codex-skill-remove { flex-shrink: 0; color: var(--vscode-descriptionForeground); }
 .codex-files { color: var(--vscode-editor-foreground); font-family: ui; font-size: 13px; }
 .codex-file-path { display: flex; gap: 8px; margin-bottom: 12px; }
 .codex-file-path input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--vscode-input-border); border-radius: 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); }
@@ -100,7 +100,22 @@
 .codex-permission-full, .codex-permission-full .codex-permission-description { color: #f47a3c; }
 .codex-permission-explanation { margin: 6px 4px 2px; padding-top: 8px; border-top: 1px solid var(--vscode-editorGroup-border); color: var(--vscode-descriptionForeground); font-size: 12px; }
 .codex-message { flex: 0 0 auto; min-width: 0; margin: 12px 0; overflow-wrap: anywhere; }
-.codex-user { align-self: flex-end; max-width: 75%; padding: 10px 16px; border-radius: 18px; background: var(--vscode-editorWidget-background); }
+/* Keep the action row inside a painted hover target, including the gaps between buttons. */
+.codex-user { position: relative; align-self: flex-end; max-width: 75%; padding-bottom: 28px; margin-bottom: 8px; background: var(--vscode-editor-background); }
+.codex-user-bubble { margin: 0; padding: 10px 16px; border-radius: 18px; background: var(--vscode-editorWidget-background); }
+.codex-user-bubble > :first-child { margin-top: 0; }
+.codex-user-bubble > :last-child { margin-bottom: 0; }
+.codex-message-actions { position: absolute; bottom: 0; right: 0; display: flex; align-items: center; gap: 6px; height: 28px; color: var(--vscode-descriptionForeground); opacity: 0; pointer-events: none; }
+.codex-user:hover .codex-message-actions, .codex-user:focus-within .codex-message-actions { opacity: 1; pointer-events: auto; }
+.codex-message-time { margin-right: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.codex-chat-running .codex-message-edit { display: none; }
+.codex-user-editing { width: 100%; max-width: 100%; }
+.codex-message-editor { display: block; box-sizing: border-box; width: 100%; min-height: 48px; max-height: 280px; margin: 0; padding: 0; resize: none; overflow-y: auto; border: 0; outline: none; color: var(--vscode-input-foreground); background: transparent; font-family: ui; font-size: 14px; line-height: 1.7; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+.codex-message-editor:focus-visible { outline: none; }
+.codex-message-edit-footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.codex-chat .codex-message-edit-send { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+.codex-chat .codex-message-edit-send:hover { background: var(--vscode-button-hoverBackground); }
+.codex-message-edit-footer button:disabled { opacity: .5; }
 .codex-message h3, .codex-approval h3, .codex-history h3 { font-size: 12px; margin: 0 0 8px; color: var(--vscode-descriptionForeground); }
 .codex-message p { margin: 12px 0; }
 .codex-chat li > p:first-child { margin-top: 0; }
@@ -108,6 +123,11 @@
 .codex-message > :last-child, .codex-activity-details > :last-child { margin-bottom: 0; }
 .codex-activity { margin: 4px 0; color: var(--vscode-descriptionForeground); }
 .codex-turn-progress { flex: 0 0 auto; margin: 12px 0 4px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-editorGroup-border); color: var(--vscode-descriptionForeground); font-size: 13px; }
+.codex-turn { display: flex; flex: 0 0 auto; flex-direction: column; min-width: 0; }
+.codex-chat .codex-turn-toggle { display: flex; align-items: center; gap: 6px; min-height: 24px; margin: 0; padding: 0; border-radius: 4px; color: inherit; background: transparent; font-family: inherit; font-size: inherit; line-height: inherit; text-align: left; }
+.codex-chat .codex-turn-toggle:hover { color: var(--vscode-editor-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.codex-turn-toggle img { flex-shrink: 0; width: 12px; height: 12px; opacity: .6; transform: rotate(-90deg); }
+.codex-turn-toggle[aria-expanded="true"] img { transform: rotate(0deg); }
 .codex-changes { flex: 0 0 auto; min-width: 0; margin: 12px 0; border: 1px solid var(--vscode-editorGroup-border); border-radius: 12px; background: var(--vscode-editorWidget-background); overflow: hidden; }
 .codex-changes-header { display: flex; align-items: center; gap: 10px; padding: 12px; }
 .codex-changes-header > img { flex-shrink: 0; width: 16px; height: 16px; }
@@ -119,9 +139,18 @@
 .codex-changes-preview { max-height: none; overflow: hidden; }
 .codex-chat .codex-change-file { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 6px 12px; border-radius: 0; color: var(--vscode-editor-foreground); background: transparent; text-align: left; }
 .codex-chat .codex-change-file:hover { background: var(--vscode-list-hoverBackground); }
-.codex-change-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codex-change-path { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .codex-change-diff { padding: 0 12px; }
 .codex-change-diff pre { margin: 0 0 8px; }
+.codex-diff { color: var(--vscode-editor-foreground); }
+.codex-diff-added { color: var(--vscode-gitDecoration-addedResourceForeground); background: var(--vscode-diffEditor-insertedLineBackground); }
+.codex-diff-removed { color: var(--vscode-gitDecoration-deletedResourceForeground); background: var(--vscode-diffEditor-removedLineBackground); }
+.codex-diff-header { color: var(--vscode-descriptionForeground); }
+.codex-diff-hunk { color: var(--vscode-textLink-foreground); }
+.codex-diff-preview { box-sizing: border-box; width: 100%; height: 100%; min-width: 0; padding: 16px 24px; overflow: auto; color: var(--vscode-editor-foreground); font-family: ui; font-size: 13px; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+.codex-diff-preview header { display: flex; align-items: center; gap: 12px; }
+.codex-diff-preview h2 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.codex-diff-preview pre { margin: 12px 0; font-family: monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .codex-chat .codex-changes-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 12px; border-radius: 0; color: var(--vscode-descriptionForeground); background: transparent; text-align: left; }
 .codex-changes-toggle img { width: 12px; height: 12px; }
 .codex-changes-toggle[aria-expanded="true"] img { transform: rotate(180deg); }
@@ -194,6 +223,7 @@
 	.codex-sidebar { flex: 0 1 auto; width: 100%; min-width: 0; max-width: 100%; max-height: 35%; border-top: 1px solid var(--vscode-editorGroup-border); border-left: 0; }
 }
 
-.codex-history-running { display: block; flex: 0 0 auto; width: 12px; height: 12px; border: 1px solid currentColor; border-top-color: transparent; border-radius: 50%; color: var(--vscode-descriptionForeground); animation: codex-history-spin 1s linear infinite; }
+.codex-history-running { display: block; flex: 0 0 auto; width: 14px; height: 14px; color: var(--vscode-descriptionForeground); animation: codex-history-spin 1s linear infinite; }
+.codex-history-row[aria-current="true"] + .codex-history-actions > .codex-history-running { color: var(--vscode-list-activeSelectionForeground); }
 
 .codex-history-unread { display: block; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-testing-iconPassed); }

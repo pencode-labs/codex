@@ -3,17 +3,44 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/coder/websocket"
 )
+
+func fixtureDaemonStart() error {
+	socket := os.Getenv("PENCODE_CODEX_DAEMON_SOCKET")
+	endpoint, err := defaultServerURL("")
+	if err != nil {
+		return err
+	}
+	control := strings.TrimPrefix(endpoint, "unix://")
+	if err := os.MkdirAll(filepath.Dir(control), 0700); err != nil {
+		return err
+	}
+	_ = os.Remove(control)
+	if err := os.Symlink(socket, control); err != nil {
+		return err
+	}
+	log, err := os.OpenFile(os.Getenv("PENCODE_CODEX_DAEMON_LOG"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	if _, err := io.WriteString(log, "start\n"); err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]string{"socketPath": socket})
+}
 
 // Existing protocol fixtures run behind a real WebSocket handshake and framing.
 func fixtureExecutable(t *testing.T) string {
@@ -24,6 +51,7 @@ func fixtureExecutable(t *testing.T) string {
 	}
 	t.Setenv("PENCODE_CODEX_PATH", path)
 	t.Setenv("PENCODE_CODEX_FIXTURE", "1")
+	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	server, closeServer := fixtureWebSocket(t.Context(), path)
 	t.Cleanup(closeServer)

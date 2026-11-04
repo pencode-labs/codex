@@ -50,6 +50,11 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 			}
 			running := a.composerView()
 			validateBindings(t, running)
+			name := html.EscapeString("<file>.go")
+			path := html.EscapeString(filepath.Join("src", "<file>.go"))
+			if !strings.Contains(running.HTML, `class="codex-change-path" title="`+path+`">`+name+`</span>`) {
+				t.Fatal("live changes must show only the complete filename", running.HTML)
+			}
 			if !strings.Contains(running.HTML, `class="codex-live-changes"`) || !strings.Contains(running.HTML, "1 个文件已更改") || !strings.Contains(running.HTML, `title="`+html.EscapeString(filepath.Join("src", "<file>.go"))+`"`) || strings.Contains(running.HTML, "excluded.go") || c.files.added != 3 || c.files.removed != 1 {
 				t.Fatal("running summary lost, duplicated, or failed to escape successful edits", running.HTML)
 			}
@@ -59,7 +64,9 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 				t.Fatal("completed turn retained its live pill")
 			}
 			validateBindings(t, view)
-			path := html.EscapeString(filepath.Join("src", "<file>.go"))
+			if !strings.Contains(view.HTML, `class="codex-change-path">`+name+`</span>`) {
+				t.Fatal("completed changes must show only the complete filename", view.HTML)
+			}
 			if strings.Count(view.HTML, `class="codex-changes"`) != 1 || !strings.Contains(view.HTML, "已编辑 1 个文件") || !strings.Contains(view.HTML, path) || strings.Contains(view.HTML, "excluded.go") || strings.Contains(view.HTML, "<pre>") {
 				t.Fatal("completion did not display only successful edits", view.HTML)
 			}
@@ -70,12 +77,12 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 			if first.added != 3 || first.removed != 1 || len(first.files[0].diffs) != 2 {
 				t.Fatal("same file must merge final edit records", first)
 			}
-			clickActivity(t, a, "change-file/one/0")
-			view = a.composerView()
+			view = changePreviewForClick(t, a, "change-file/one/0").View
 			validateBindings(t, view)
 			if !strings.Contains(view.HTML, "+&lt;script&gt;") || !strings.Contains(view.HTML, "+extra") || strings.Contains(view.HTML, "<script>") {
 				t.Fatal("file diff was lost or not escaped", view.HTML)
 			}
+			clickActivity(t, a, "changes/one")
 			clickActivity(t, a, "changes/one")
 			view = a.composerView()
 			validateBindings(t, view)
@@ -124,6 +131,51 @@ func TestDiffLineCounts(t *testing.T) {
 	}
 }
 
+func TestDiffHighlighting(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, kind string
+		want             []string
+	}{
+		{"unified", "--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n--- old\n+++ <new>\n context\n", "update", []string{
+			`<span class="codex-diff-header">--- a/file` + "\n+++ b/file\n</span>",
+			`<span class="codex-diff-hunk">@@ -1,2 +1,2 @@` + "\n</span>",
+			`<span class="codex-diff-removed">--- old` + "\n</span>",
+			`<span class="codex-diff-added">+++ &lt;new&gt;` + "\n</span> context\n",
+		}},
+		{"headerless", "+<script>\n-old", "", []string{
+			`<span class="codex-diff-added">+&lt;script&gt;` + "\n</span>",
+			`<span class="codex-diff-removed">-old</span>`,
+		}},
+		{"added file", "plain\n-minus\n@@ content\n", "add", []string{
+			`<span class="codex-diff-added">plain` + "\n-minus\n@@ content\n</span>",
+		}},
+		{"deleted file", "plain\n+plus\n", "delete", []string{
+			`<span class="codex-diff-removed">plain` + "\n+plus\n</span>",
+		}},
+		{"multiple files", "@@ -1 +1 @@\n-old\n+new\ndiff --git a/b b/b\n--- a/b\n+++ b/b\n", "update", []string{
+			`<span class="codex-diff-header">diff --git a/b b/b` + "\n--- a/b\n+++ b/b\n</span>",
+		}},
+		{"context", " context\n\n last", "", nil},
+		{"empty", "", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b strings.Builder
+			renderDiff(&b, tc.text, tc.kind)
+			for _, want := range tc.want {
+				if !strings.Contains(b.String(), want) {
+					t.Fatalf("missing highlight %q in %s", want, b.String())
+				}
+			}
+			plain := strings.NewReplacer(`<pre><code class="codex-diff">`, "", `</code></pre>`, "", `</span>`, "",
+				`<span class="codex-diff-added">`, "", `<span class="codex-diff-removed">`, "",
+				`<span class="codex-diff-header">`, "", `<span class="codex-diff-hunk">`, "").Replace(b.String())
+			if html.UnescapeString(plain) != tc.text {
+				t.Fatal("highlighting changed the diff text", b.String())
+			}
+		})
+	}
+}
+
 func TestAddedAndDeletedFileCounts(t *testing.T) {
 	var item threadItem
 	if err := json.Unmarshal([]byte(`{"type":"fileChange","status":"completed","changes":[{"path":"new.go","kind":{"type":"add"},"diff":"package main\n\nfunc main() {}\n"},{"path":"old.go","kind":{"type":"delete"},"diff":"// removed\nlast line"},{"path":"empty.go","kind":{"type":"add"},"diff":""}]}`), &item); err != nil {
@@ -163,6 +215,12 @@ func TestFileChangesBoundDiffDisplay(t *testing.T) {
 	if !utf8.ValidString(f.html) || len(f.html) > 256<<10 || !strings.Contains(f.html, "部分 diff 已省略") {
 		t.Fatal("large diff was unbounded or not valid UTF-8", len(f.html))
 	}
+	f.files[0].diffs[0].text = strings.Repeat("+\n-\n", 100000)
+	f.html = ""
+	f.prepare()
+	if len(f.html) > 256<<10 || !strings.Contains(f.html, "部分 diff 已省略") {
+		t.Fatal("highlight markup exceeded the display budget", len(f.html))
+	}
 }
 
 func TestFileChangesCollapsedPreview(t *testing.T) {
@@ -179,11 +237,11 @@ func TestFileChangesCollapsedPreview(t *testing.T) {
 	if strings.Count(view.HTML, `class="codex-change-file"`) != 3 || strings.Contains(view.HTML, "four.go") || strings.Contains(view.HTML, "five.go") || strings.Contains(view.HTML, "<pre>") || strings.Contains(view.HTML, `data-ref="changes/turn/list" data-pencode-scroll`) || !strings.Contains(view.HTML, "已编辑 5 个文件") {
 		t.Fatal("initial preview must show only three files without diffs or a scroll binding", view.HTML)
 	}
-	clickActivity(t, a, "change-file/turn/0")
+	preview := changePreviewForClick(t, a, "change-file/turn/0")
 	view = a.composerView()
 	validateBindings(t, view)
-	if strings.Count(view.HTML, `class="codex-change-file"`) != 5 || !strings.Contains(view.HTML, "+new") || f.collapsed {
-		t.Fatal("opening a preview file must reveal the full list and its diff", view.HTML)
+	if strings.Count(view.HTML, `class="codex-change-file"`) != 3 || strings.Contains(view.HTML, "<pre>") || !f.collapsed || !strings.Contains(preview.View.HTML, "+new") {
+		t.Fatal("opening a file preview must preserve the collapsed chat summary", view.HTML)
 	}
 }
 
@@ -241,16 +299,14 @@ func TestHistoryRestoresFileChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { a.client.close() }()
-	for iteration := range 2 {
+	for range 2 {
 		view := a.composerView()
 		validateBindings(t, view)
 		if strings.Count(view.HTML, `class="codex-changes"`) != 1 || !strings.Contains(view.HTML, "saved.go") || strings.Contains(view.HTML, "已处理") {
 			t.Fatal("history lost file changes or estimated an absent duration", view.HTML)
 		}
-		if iteration == 0 {
-			clickActivity(t, a, "change-file/old-turn/0")
-		}
-		if !strings.Contains(a.composerView().HTML, "+stored") {
+		preview := changePreviewForClick(t, a, "change-file/old-turn/0")
+		if !strings.Contains(preview.View.HTML, "+stored") {
 			t.Fatal("restored diff did not open")
 		}
 		a.selectConversation(nil)
@@ -259,6 +315,80 @@ func TestHistoryRestoresFileChanges(t *testing.T) {
 		}
 		if err := a.resume("saved"); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func changePreviewForClick(t *testing.T, a *agent, ref string) peb.UI {
+	t.Helper()
+	updates := make(chan peb.UI, 2)
+	previous := a.publisher
+	a.publisher = syncPublisher{updates: updates}
+	defer func() { a.publisher = previous }()
+	clickActivity(t, a, ref)
+	if len(updates) != 2 {
+		t.Fatalf("preview must publish its content and reveal its tab: got %d updates", len(updates))
+	}
+	ui, reveal := <-updates, <-updates
+	if ui.Kind != peb.EditorTab || ui.View == nil || reveal.ID != ui.ID || reveal.View != nil {
+		t.Fatal("file click did not open and reveal a diff tab", ui, reveal)
+	}
+	validateBindings(t, ui.View)
+	return ui
+}
+
+func TestLiveFileChangePreviews(t *testing.T) {
+	root := t.TempDir()
+	f := newTurnFiles(`turn/"one`, root)
+	edit := threadItem{Type: "fileChange", Status: "completed", Changes: []change{
+		{Path: "src/<file>.go", Diff: "-old\n+<new>\n"},
+		{Path: "test/<file>.go", Diff: "deleted\n"},
+	}}
+	edit.Changes[1].Kind.Type = "delete"
+	f.add(edit)
+	c := &conversation{thread: thread{ID: "thread/one"}, context: peb.ActionContext{ProjectPath: root}, files: f, busy: true}
+	a := &agent{selected: c}
+	view := a.composerView()
+	validateBindings(t, view)
+	if len(f.liveBindings) != 2 || !strings.Contains(view.HTML, `<button type="button" class="codex-live-change" data-ref="change-file/turn/&#34;one/0"`) {
+		t.Fatal("live file rows must have click bindings", view.HTML, f.liveBindings)
+	}
+	first := changePreviewForClick(t, a, `change-file/turn/"one/0`)
+	if first.Context.ProjectPath != root || first.Title != "<file>.go · 差异" || !strings.Contains(first.View.HTML, "+&lt;new&gt;") || strings.Contains(first.View.HTML, "<new>") {
+		t.Fatal("preview lost its title, context or escaped diff", first)
+	}
+	second := changePreviewForClick(t, a, `change-file/turn/"one/1`)
+	if first.ID == second.ID || !strings.Contains(second.View.HTML, `class="codex-diff-removed">deleted`) {
+		t.Fatal("same-name files must open distinct previews with deletion highlighting", second)
+	}
+	f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "src/<file>.go", Diff: "+next\n"}}})
+	view = a.composerView()
+	validateBindings(t, view)
+	updated := changePreviewForClick(t, a, `change-file/turn/"one/0`)
+	if updated.ID != first.ID || !strings.Contains(updated.View.HTML, "+next") || f.complete || !f.collapsed || !c.busy || strings.Contains(view.HTML, "<pre>") || len(f.liveBindings) != 2 {
+		t.Fatal("reopening a live preview must reuse its tab and include new edits without changing the chat", updated)
+	}
+	updates := make(chan peb.UI, 2)
+	a.publisher = syncPublisher{updates: updates}
+	for _, ref := range []string{"change-file/missing/0", `change-file/turn/"one/-1`, `change-file/turn/"one/2`, `change-file/turn/"one/invalid`} {
+		clickActivity(t, a, ref)
+	}
+	if len(updates) != 0 {
+		t.Fatal("invalid file clicks opened a preview")
+	}
+}
+
+func TestFileChangePreviewBounds(t *testing.T) {
+	for _, diff := range []string{strings.Repeat("+界<&\n", 100000), strings.Repeat("+\n-\n", 100000)} {
+		f := newTurnFiles("turn", t.TempDir())
+		f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "large.go", Diff: diff}}})
+		a := &agent{selected: &conversation{files: f}}
+		ui := changePreviewForClick(t, a, "change-file/turn/0")
+		if !utf8.ValidString(ui.View.HTML) || !strings.Contains(ui.View.HTML, "部分 diff 已省略") {
+			t.Fatal("large preview must remain valid UTF-8 and explain truncation")
+		}
+		if _, err := peb.EncodeUI(nil, ui); err != nil {
+			t.Fatal("preview exceeded the extension transport budget", err)
 		}
 	}
 }

@@ -190,11 +190,12 @@ func TestSharedSessionSurvivesClientCloseAndReconnect(t *testing.T) {
 	}
 }
 
-// Real CLI coverage exercises the daemon command, its Unix socket handshake,
+// Real CLI coverage exercises default socket discovery, its Unix handshake,
 // and writer ownership. Injecting an item materializes history without inference.
 func TestLiveSharedAppServer(t *testing.T) {
 	liveCodexHome(t)
 	root := t.TempDir()
+	liveAppServer(t, root, "")
 	first, err := startClient(t.Context(), root, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +238,7 @@ func TestLiveSharedAppServer(t *testing.T) {
 	if err = second.resume(id); err != nil || !second.selected.loaded || second.selected.draft != "keep draft" {
 		t.Fatal("new connection could not resume the same session", err)
 	}
-	t.Log("two daemon clients resumed the same persistent thread and reconnected after closing; no inference requested")
+	t.Log("two clients discovered the same existing server and reconnected after closing; no inference requested")
 }
 
 func TestLiveSharedRunningTurn(t *testing.T) {
@@ -272,6 +273,7 @@ func TestLiveSharedRunningTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	liveAppServer(t, root, "")
 	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: root}, conversations: make(map[string]*conversation), workspaceOpen: true}
 	defer a.closeClient()
 	c, err := a.startThread()

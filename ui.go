@@ -22,7 +22,7 @@ import (
 var chatCSS string
 
 var chatParser = parser.New(parser.WithExtensions(extension.TableParser, extension.NewLinkifyParser()))
-var chatRenderer = markdownhtml.New(markdownhtml.WithExtensions(extension.TableHTMLRenderer), markdownhtml.WithNodeRendererDecorators(map[ast.NodeKind]markdownhtml.NodeRendererDecorator{
+var chatRenderer = markdownhtml.New(markdownhtml.WithHardWraps(), markdownhtml.WithExtensions(extension.TableHTMLRenderer), markdownhtml.WithNodeRendererDecorators(map[ast.NodeKind]markdownhtml.NodeRendererDecorator{
 	ast.KindLink: chatLinkDecorator, ast.KindAutoLink: chatLinkDecorator,
 }))
 
@@ -66,10 +66,19 @@ func (a *agent) composerView() *peb.EditorView {
 		b.WriteString(html.EscapeString(a.selected.ID))
 	}
 	b.WriteString(`">`)
+	status := a.status
+	if a.selected != nil && a.selected.status != "" {
+		status = a.selected.status
+	}
+	if a.selected != nil && a.selected.syncError != "" {
+		status = a.selected.syncError
+	}
 	if a.selected != nil {
-		bindings = a.selected.render(&b, bindings)
+		bindings = a.selected.render(&b, bindings, status)
 	} else {
-		b.WriteString(`<article class="codex-chat"><div class="codex-empty"><h2>与 Codex 一起工作</h2><p>回复、命令执行和文件修改会显示在这里。</p></div></article>`)
+		b.WriteString(`<article class="codex-chat">`)
+		renderChatStatus(&b, status)
+		b.WriteString(`<div class="codex-empty"><h2>与 Codex 一起工作</h2><p>回复、命令执行和文件修改会显示在这里。</p></div></article>`)
 	}
 	b.WriteString(`</div>`)
 	p := a.permission()
@@ -82,10 +91,26 @@ func (a *agent) composerView() *peb.EditorView {
 	if busy && a.selected.files != nil && !a.selected.files.complete {
 		a.selected.files.prepareLive()
 		b.WriteString(a.selected.files.liveHTML)
+		bindings = append(bindings, a.selected.files.liveBindings...)
 	}
 	b.WriteString(`<form id="pencode-extension-codex-form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`">`)
+	if images := a.images[a.attachmentScope()]; len(images) > 0 {
+		b.WriteString(`<div class="codex-images" aria-label="附加图片">`)
+		for index, image := range images {
+			ref := "remove-image/" + strconv.Itoa(index)
+			b.WriteString(`<button class="codex-image" type="button" data-ref="`)
+			b.WriteString(ref)
+			b.WriteString(`" title="移除图片" aria-label="移除图片 `)
+			b.WriteString(strconv.Itoa(index + 1))
+			b.WriteString(`"><img src="`)
+			b.WriteString(image.preview)
+			b.WriteString(`" alt="待发送图片"><span aria-hidden="true">×</span></button>`)
+			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
+		}
+		b.WriteString(`</div>`)
+	}
 	files := a.attachments[a.attachmentScope()]
 	if len(files) > 0 {
 		b.WriteString(`<div class="codex-attachments" aria-label="附加文件">`)
@@ -104,24 +129,7 @@ func (a *agent) composerView() *peb.EditorView {
 		}
 		b.WriteString(`</div>`)
 	}
-	if skills := a.skills[a.attachmentScope()]; len(skills) > 0 {
-		b.WriteString(`<div class="codex-skills" aria-label="已选技能">`)
-		for index, skill := range skills {
-			ref := "remove-skill/" + strconv.Itoa(index)
-			b.WriteString(`<button class="codex-skill" type="button" data-ref="`)
-			b.WriteString(ref)
-			b.WriteString(`" title="`)
-			b.WriteString(html.EscapeString(skill.path))
-			b.WriteString(`" aria-label="移除技能 `)
-			b.WriteString(html.EscapeString(skill.label))
-			b.WriteString(`"><img src="resources/icons/layers-2.svg" alt="" aria-hidden="true"><span>`)
-			b.WriteString(html.EscapeString(skill.label))
-			b.WriteString(`</span><span class="codex-skill-remove" aria-hidden="true">×</span></button>`)
-			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
-		}
-		b.WriteString(`</div>`)
-	}
-	b.WriteString(`<textarea id="pencode-extension-codex-prompt" data-ref="prompt" data-pencode-autosize data-pencode-submit-on-enter="form"`)
+	b.WriteString(`<textarea id="pencode-extension-codex-prompt" data-ref="prompt" data-pencode-markdown-links data-pencode-autosize data-pencode-paste-images data-pencode-submit-on-enter="form"`)
 	if a.completion.kind != 0 {
 		b.WriteString(` data-pencode-completion="true" aria-expanded="true" aria-controls="pencode-extension-codex-completion-list" aria-autocomplete="list"`)
 		if a.completion.count != 0 {
@@ -137,7 +145,7 @@ func (a *agent) composerView() *peb.EditorView {
 		b.WriteString(strconv.FormatUint(a.completion.revision, 10))
 		b.WriteByte('"')
 	}
-	b.WriteString(` class="codex-prompt" aria-label="给 Codex 的任务" placeholder="和 Codex 一起工作，/ 选择技能，@ 引用文件" rows="2">`)
+	b.WriteString(` class="codex-prompt" aria-label="给 Codex 的任务" placeholder="和 Codex 一起工作，/ 选择技能，@ 引用文件或文件夹" rows="2">`)
 	b.WriteString(html.EscapeString(draft))
 	b.WriteString(`</textarea><div class="codex-input-footer"><button data-ref="add-file" class="codex-icon-button" type="button" title="添加文件" aria-label="添加文件" aria-haspopup="dialog"><img src="resources/icons/plus.svg" alt=""></button><button data-ref="permission-settings" class="codex-access`)
 	if p.sandbox == "danger-full-access" {
@@ -176,18 +184,6 @@ func (a *agent) composerView() *peb.EditorView {
 	b.WriteString(`</div></form>`)
 	bindings = a.renderCompletion(&b, bindings)
 	bindings = append(bindings, peb.EditorBinding{Ref: "prompt", Kind: "input"}, peb.EditorBinding{Ref: "form", Kind: "submit"}, peb.EditorBinding{Ref: "add-file", Kind: "click"}, peb.EditorBinding{Ref: "permission-settings", Kind: "click"}, peb.EditorBinding{Ref: "model-settings", Kind: "click"})
-	status := a.status
-	if a.selected != nil && a.selected.status != "" {
-		status = a.selected.status
-	}
-	if a.selected != nil && a.selected.syncError != "" {
-		status = a.selected.syncError
-	}
-	if status != "" {
-		b.WriteString(`<p class="codex-status" role="status">`)
-		b.WriteString(html.EscapeString(status))
-		b.WriteString(`</p>`)
-	}
 	if busy && !a.selected.observing {
 		bindings = append(bindings, peb.EditorBinding{Ref: "stop", Kind: "click"})
 	} else if !busy {
@@ -235,7 +231,7 @@ func (a *agent) historyView() *peb.EditorView {
 			b.WriteString(`<div class="codex-history-actions">`)
 			c := a.conversations[t.ID]
 			if c != nil && c.busy || c == nil && t.Status.Type == "active" {
-				b.WriteString(`<span class="codex-history-running" role="status" aria-label="会话运行中" title="会话运行中"></span>`)
+				b.WriteString(`<img class="codex-history-running" src="resources/icons/loader-circle.svg" role="status" aria-label="会话运行中" title="会话运行中" alt="">`)
 			} else if c != nil && c.unread {
 				b.WriteString(`<span class="codex-history-unread" role="status" aria-label="会话已完成，尚未查看" title="会话已完成，尚未查看"></span>`)
 			}
@@ -261,8 +257,31 @@ func (a *agent) historyView() *peb.EditorView {
 	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
 }
 
-func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
-	b.WriteString(`<article class="codex-chat">`)
+func renderChatStatus(b *strings.Builder, status string) {
+	if status != "" {
+		b.WriteString(`<p class="codex-message codex-status" role="status">`)
+		b.WriteString(html.EscapeString(status))
+		b.WriteString(`</p>`)
+	}
+}
+
+func (c *conversation) renderProgress(b *strings.Builder, bindings []peb.EditorBinding, progress *turnProgress, status string, collapsible bool) []peb.EditorBinding {
+	progress.render(b, collapsible)
+	if collapsible {
+		bindings = append(bindings, peb.EditorBinding{Ref: progress.toggleRef, Kind: "click"})
+	}
+	if progress == c.progress {
+		renderChatStatus(b, status)
+	}
+	return bindings
+}
+
+func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding, status string) []peb.EditorBinding {
+	b.WriteString(`<article class="codex-chat`)
+	if c.busy {
+		b.WriteString(` codex-chat-running`)
+	}
+	b.WriteString(`">`)
 	if c.cursor != "" {
 		b.WriteString(`<button data-ref="older" type="button">加载更早的记录</button>`)
 		bindings = append(bindings, peb.EditorBinding{Ref: "older", Kind: "click"})
@@ -326,38 +345,96 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding) 
 			bindings = files.render(b, bindings)
 			files = i.files
 		}
-		if i.data.Type != "userMessage" && i.progress != nil && i.progress != progress {
-			i.progress.render(b)
-			progress = i.progress
+		end := index + 1
+		for end < len(c.items) && c.items[end].progress == i.progress && c.items[end].files == i.files {
+			end++
 		}
+		bindings = c.renderTurn(b, bindings, c.items[index:end], status, latestActivity-index)
+		progress = i.progress
+		index = end
+	}
+	bindings = files.render(b, bindings)
+	if c.progress != nil && c.progress != progress {
+		bindings = c.renderProgress(b, bindings, c.progress, status, false)
+	}
+	if c.progress == nil {
+		renderChatStatus(b, status)
+	}
+	for _, r := range c.requests {
+		bindings = r.render(b, bindings)
+	}
+	b.WriteString(`</article>`)
+	return bindings
+}
+
+func (c *conversation) renderTurn(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, status string, latestActivity int) []peb.EditorBinding {
+	p := items[0].progress
+	if p == nil {
+		return c.renderItems(b, bindings, items, latestActivity)
+	}
+	// Keep the prompt and final response outside the region replaced by a toggle.
+	start := 0
+	for start < len(items) && items[start].data.Type == "userMessage" {
+		start++
+	}
+	bindings = c.renderItems(b, bindings, items[:start], latestActivity)
+	if !p.complete {
+		bindings = c.renderProgress(b, bindings, p, status, false)
+		return c.renderItems(b, bindings, items[start:], latestActivity-start)
+	}
+	final := len(items)
+	for index := len(items) - 1; index >= start; index-- {
+		i := items[index]
+		if i.data.Type == "agentMessage" && i.data.Phase != "commentary" && i.text.Len() > 0 {
+			final = index
+			break
+		}
+	}
+	collapsible := p.id != "" && (final > start || final+1 < len(items))
+	b.WriteString(`<section class="codex-turn"`)
+	if p.id != "" {
+		b.WriteString(` data-ref="turn/`)
+		b.WriteString(html.EscapeString(p.id))
+		b.WriteString(`/region" data-pencode-region`)
+	}
+	b.WriteString(`>`)
+	bindings = c.renderProgress(b, bindings, p, status, collapsible)
+	if !collapsible || p.expanded {
+		bindings = c.renderItems(b, bindings, items[start:final], latestActivity-start)
+		if final < len(items) {
+			bindings = c.renderItems(b, bindings, items[final+1:], latestActivity-final-1)
+		}
+	}
+	b.WriteString(`</section>`)
+	if final < len(items) {
+		bindings = c.renderItems(b, bindings, items[final:final+1], -1)
+	}
+	return bindings
+}
+
+func (c *conversation) renderItems(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, latestActivity int) []peb.EditorBinding {
+	for index := 0; index < len(items); {
+		i := items[index]
 		if i.activityKinds() != 0 {
 			end := index + 1
-			for end < len(c.items) && c.items[end].activityKinds() != 0 && c.items[end].progress == i.progress && c.items[end].files == i.files {
+			for end < len(items) && items[end].activityKinds() != 0 {
 				end++
 			}
-			bindings = renderActivityGroup(b, bindings, c.items[index:end], latestActivity >= index && latestActivity < end)
+			bindings = renderActivityGroup(b, bindings, items[index:end], latestActivity >= index && latestActivity < end)
 			index = end
 			continue
 		}
-		b.WriteString(i.html)
-		bindings = append(bindings, i.linkBindings...)
-		if i.data.Type == "userMessage" && i.progress != nil && i.progress != progress {
-			i.progress.render(b)
-			progress = i.progress
+		if c.editing == i {
+			bindings = c.renderMessageEditor(b, bindings)
+		} else {
+			b.WriteString(i.html)
+			bindings = append(bindings, i.linkBindings...)
 		}
 		if i.detailRef != "" {
 			bindings = append(bindings, peb.EditorBinding{Ref: i.detailRef, Kind: "click"})
 		}
 		index++
 	}
-	bindings = files.render(b, bindings)
-	if c.progress != nil && c.progress != progress {
-		c.progress.render(b)
-	}
-	for _, r := range c.requests {
-		bindings = r.render(b, bindings)
-	}
-	b.WriteString(`</article>`)
 	return bindings
 }
 
@@ -408,6 +485,9 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 		b.WriteString(`" data-pencode-region="`)
 	}
 	b.WriteString(`">`)
+	if i.data.Type == "userMessage" {
+		b.WriteString(`<div class="codex-user-bubble">`)
+	}
 	if activity {
 		hasDetails := i.text.Len() > 0 || i.output.Len() > 0 || i.data.Command != "" || len(i.data.Changes) > 0
 		if i.data.ID != "" && hasDetails {
@@ -434,7 +514,7 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 			i.renderActivityLabel(b, label)
 		}
 		b.WriteString(`</span>`)
-		renderActivityStatus(b, i.data.Status)
+		renderActivityStatus(b, i.activityStatus())
 		if i.detailRef != "" {
 			b.WriteString(`<img class="codex-activity-chevron" src="resources/icons/chevron-down.svg" alt=""></button>`)
 		} else {
@@ -450,10 +530,23 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 		if i.complete && (i.data.Type == "userMessage" || i.data.Type == "agentMessage" || i.data.Type == "plan") {
 			i.linkBindings = renderMarkdown(b, i.text.String(), root, scope)
 		} else {
-			b.WriteString(`<div class="codex-text">`)
+			b.WriteString(`<div class="codex-text" data-pencode-preserve-whitespace>`)
 			b.WriteString(html.EscapeString(i.text.String()))
 			b.WriteString(`</div>`)
 		}
+	}
+	if len(i.images) > 0 {
+		b.WriteString(`<div class="codex-images" aria-label="消息图片">`)
+		for _, preview := range i.images {
+			if preview == "" {
+				b.WriteString(`<span class="codex-muted">[图片]</span>`)
+				continue
+			}
+			b.WriteString(`<img class="codex-message-image" src="`)
+			b.WriteString(preview)
+			b.WriteString(`" alt="已发送图片">`)
+		}
+		b.WriteString(`</div>`)
 	}
 	if i.data.Command != "" {
 		pre(b, i.data.Command)
@@ -465,10 +558,14 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 		b.WriteString(`<h4>`)
 		b.WriteString(html.EscapeString(change.Path))
 		b.WriteString(`</h4>`)
-		pre(b, change.Diff[:min(len(change.Diff), 64<<10)])
+		renderDiff(b, change.Diff[:min(len(change.Diff), 64<<10)], change.Kind.Type)
 	}
 	if activity {
 		b.WriteString(`</div>`)
+	}
+	if i.data.Type == "userMessage" {
+		b.WriteString(`</div>`)
+		i.renderMessageActions(b)
 	}
 	b.WriteString(`</section>`)
 }

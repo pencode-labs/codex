@@ -198,19 +198,22 @@ func (p *composerCompletion) indexFiles(root string) {
 			}
 			return nil
 		}
-		if entry.IsDir() {
-			if path != root {
-				switch entry.Name() {
-				case ".git", ".hg", ".svn", "node_modules", "vendor", "target", ".venv", "__pycache__":
-					return fs.SkipDir
-				}
-			}
+		if path == root {
 			return nil
 		}
-		if entry.Type().IsRegular() {
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".hg", ".svn", "node_modules", "vendor", "target", ".venv", "__pycache__":
+				return fs.SkipDir
+			}
+		}
+		if entry.IsDir() || entry.Type().IsRegular() {
 			relative, err := filepath.Rel(root, path)
 			if err == nil {
 				relative = filepath.ToSlash(relative)
+				if entry.IsDir() {
+					relative += "/"
+				}
 				p.files = append(p.files, completionFile{relative, strings.ToLower(relative)})
 			}
 		}
@@ -272,18 +275,32 @@ func (a *agent) handleCompletion(e peb.EditorEvent) error {
 		}
 		before, after := draft[:p.start], draft[p.end:]
 		a.dismissCompletion()
+		reference := ""
 		if kind == '@' {
-			a.addAttachment(filepath.Join(a.context.ProjectPath, filepath.FromSlash(item.path)))
-			label := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(filepath.Base(item.path), `\`, `\\`), `[`, `\[`), `]`, `\]`)
-			path := strings.ReplaceAll(url.PathEscape(item.path), "%2F", "/")
-			reference := "[@" + label + "](" + path + ") "
-			a.editCompletion(before+reference+after, utf8.RuneCountInString(before)+utf8.RuneCountInString(reference))
-			return nil
+			reference = markdownFileReference(item.path)
+		} else {
+			reference = item.skill.reference
 		}
-		a.addSkill(item.skill)
-		a.editCompletion(before+after, utf8.RuneCountInString(before))
+		reference += " "
+		a.editCompletion(before+reference+after, utf8.RuneCountInString(before)+utf8.RuneCountInString(reference))
 	}
 	return nil
+}
+
+func markdownFileReference(path string) string {
+	label := filepath.Base(path)
+	if strings.HasSuffix(path, "/") {
+		label += "/"
+	}
+	return markdownReference(label, path)
+}
+
+func markdownReference(label, path string) string {
+	for _, character := range []string{`\`, `[`, `]`, `(`, `)`} {
+		label = strings.ReplaceAll(label, character, `\`+character)
+	}
+	path = strings.ReplaceAll(url.PathEscape(filepath.ToSlash(path)), "%2F", "/")
+	return "[" + label + "](" + path + ")"
 }
 
 func (a *agent) renderCompletion(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
@@ -295,7 +312,7 @@ func (a *agent) renderCompletion(b *strings.Builder, bindings []peb.EditorBindin
 	if p.kind == '/' {
 		b.WriteString("技能")
 	} else {
-		b.WriteString("项目文件")
+		b.WriteString("项目文件和文件夹")
 	}
 	b.WriteString(`</span><span>↑↓ 选择 · Enter / Tab 确认 · Esc 关闭</span></div><div id="pencode-extension-codex-completion-list" class="codex-completion-list" data-ref="completion-list" data-pencode-region role="listbox" aria-label="输入建议">`)
 	for index, item := range p.items[:p.count] {
@@ -323,7 +340,7 @@ func (a *agent) renderCompletion(b *strings.Builder, bindings []peb.EditorBindin
 			message = p.skillError
 		}
 		if p.kind == '@' {
-			message = "没有匹配的项目文件"
+			message = "没有匹配的项目文件或文件夹"
 			if p.error != "" {
 				message = p.error
 			}

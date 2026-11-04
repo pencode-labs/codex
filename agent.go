@@ -23,6 +23,7 @@ type input struct {
 	TextElements []struct{} `json:"text_elements,omitempty"`
 	Name         string     `json:"name,omitempty"`
 	Path         string     `json:"path,omitempty"`
+	URL          string     `json:"url,omitempty"`
 }
 type change struct {
 	Path string `json:"path"`
@@ -40,13 +41,16 @@ type commandAction struct {
 }
 type threadItem struct {
 	ID               string          `json:"id"`
+	StartedAtMs      int64           `json:"startedAtMs"`
 	Type             string          `json:"type"`
 	Text             string          `json:"text"`
+	Phase            string          `json:"phase"`
 	Content          []input         `json:"content"`
 	Summary          []string        `json:"summary"`
 	Command          string          `json:"command"`
 	CommandActions   []commandAction `json:"commandActions"`
 	Status           string          `json:"status"`
+	ExitCode         *int            `json:"exitCode"`
 	AggregatedOutput string          `json:"aggregatedOutput"`
 	Changes          []change        `json:"changes"`
 	Server           string          `json:"server"`
@@ -84,6 +88,8 @@ type chatItem struct {
 	sweep         bool
 	html          string
 	linkBindings  []peb.EditorBinding
+	images        []string
+	sentAt        time.Time
 }
 type approval struct {
 	id      json.RawMessage
@@ -109,6 +115,11 @@ type conversation struct {
 	observedDigest               [32]byte
 	syncAfter                    time.Time
 	syncError                    string
+	editing                      *chatItem
+	editDraft                    string
+	editInputs                   []input
+	editRevision                 uint64
+	editReverted                 bool
 }
 type threadPage struct {
 	Data       []thread `json:"data"`
@@ -151,7 +162,7 @@ type agent struct {
 	selected                                   *conversation
 	drafts                                     map[string]string
 	attachments                                map[attachmentScope][]string
-	skills                                     map[attachmentScope][]selectedSkill
+	images                                     map[attachmentScope][]imageAttachment
 	filePicker                                 *filePicker
 	model, status                              string
 	effort, pendingModel                       string
@@ -477,6 +488,8 @@ func (a *agent) handleCommand(cmd command) error {
 		if e.Event.Ref == "prompt" {
 			a.setDraft(e.Event.Value)
 			a.updateCompletion(e.Event)
+		} else if c != nil && e.Event.Ref == "message-edit-text" && c.editing != nil && !c.busy {
+			c.editDraft = e.Event.Value
 		} else if c != nil {
 			parts := strings.SplitN(e.Event.Ref, "/", 3)
 			if len(parts) == 3 && parts[0] == "answer" {
@@ -491,13 +504,25 @@ func (a *agent) handleCommand(cmd command) error {
 		if e.Event.Ref == "prompt" {
 			return a.handleCompletion(e.Event)
 		}
+	case "paste":
+		if e.Event.Ref == "prompt" {
+			return a.pasteImage(e.Event)
+		}
 	case "submit":
+		if e.Event.Ref == "message-edit-form" {
+			return a.sendEditedMessage()
+		}
 		if a.completion.kind != 0 {
 			return a.handleCompletion(peb.EditorEvent{Kind: "click", Data: "accept"})
 		}
 		return a.send()
 	case "click":
 		switch e.Event.Ref {
+		case "message-edit-cancel":
+			if c != nil && !c.busy {
+				c.cancelEdit()
+			}
+			return nil
 		case "new":
 			a.selectConversation(nil)
 			return a.closeComposerMenus()
@@ -528,6 +553,20 @@ func (a *agent) handleCommand(cmd command) error {
 				return a.loadHistory(c)
 			}
 		default:
+			if c != nil && strings.HasPrefix(e.Event.Ref, "turn/") {
+				if p := c.turnProgress(strings.TrimPrefix(e.Event.Ref, "turn/")); p != nil && p.complete {
+					p.expanded = !p.expanded
+					c.dirty = true
+				}
+				return nil
+			}
+			if id, ok := strings.CutPrefix(e.Event.Ref, "edit-message/"); ok {
+				return a.editMessage(id)
+			}
+			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-image/"); ok {
+				a.removeImage(index)
+				return nil
+			}
 			if index, ok := strings.CutPrefix(e.Event.Ref, "completion/"); ok {
 				n, err := strconv.Atoi(index)
 				if err == nil && a.completion.kind != 0 && n >= 0 && n < a.completion.count {
@@ -535,6 +574,9 @@ func (a *agent) handleCommand(cmd command) error {
 					return a.handleCompletion(peb.EditorEvent{Kind: "click", Data: "accept"})
 				}
 				return nil
+			}
+			if ref, ok := strings.CutPrefix(e.Event.Ref, "change-file/"); ok {
+				return a.openChangePreview(ref)
 			}
 			if c != nil && c.handleChangesClick(e.Event.Ref) {
 				return nil
@@ -544,10 +586,6 @@ func (a *agent) handleCommand(cmd command) error {
 			}
 			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-file/"); ok {
 				a.removeAttachment(index)
-				return nil
-			}
-			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-skill/"); ok {
-				a.removeSkill(index)
 				return nil
 			}
 			if c != nil && strings.HasPrefix(e.Event.Ref, "item/") {
@@ -634,8 +672,8 @@ func (a *agent) send() error {
 	}
 	scope := a.attachmentScope()
 	files := a.attachments[scope]
-	skills := a.skills[scope]
-	if strings.TrimSpace(prompt) == "" && len(files) == 0 && len(skills) == 0 {
+	images := a.images[scope]
+	if strings.TrimSpace(prompt) == "" && len(files) == 0 && len(images) == 0 {
 		return nil
 	}
 	if c != nil && c.busy {
@@ -655,13 +693,13 @@ func (a *agent) send() error {
 			return err
 		}
 		c.draft = prompt
+		if len(images) > 0 {
+			a.images[a.attachmentScope()] = images
+			delete(a.images, scope)
+		}
 		if len(files) > 0 {
 			a.attachments[a.attachmentScope()] = files
 			delete(a.attachments, scope)
-		}
-		if len(skills) > 0 {
-			a.skills[a.attachmentScope()] = skills
-			delete(a.skills, scope)
 		}
 	} else if !c.loaded {
 		if err := a.resume(c.ID); err != nil {
@@ -674,6 +712,28 @@ func (a *agent) send() error {
 	if c.busy {
 		return fmt.Errorf("当前会话仍有任务在运行，请等待完成或点击停止")
 	}
+	c.cancelEdit()
+	a.turnInputs = append(a.turnInputs[:0], input{Type: "text", Text: attachmentPrompt(prompt, files)})
+	for _, image := range images {
+		a.turnInputs = append(a.turnInputs, input{Type: "image", URL: image.url})
+	}
+	defer func() { clear(a.turnInputs); a.turnInputs = a.turnInputs[:0] }()
+	if err := a.startTurn(c, a.turnInputs); err != nil {
+		return err
+	}
+	c.draft = ""
+	delete(a.attachments, a.attachmentScope())
+	delete(a.images, a.attachmentScope())
+	if fresh {
+		delete(a.drafts, a.context.ProjectPath)
+	}
+	if c.Name == "" && c.titleJob == nil {
+		a.generateTitle(c, attachmentPrompt(prompt, files))
+	}
+	return nil
+}
+
+func (a *agent) startTurn(c *conversation, inputs []input) error {
 	// Show the stop action before waiting for turn/start to acknowledge the task.
 	a.setBusy(c, true)
 	c.progress = &turnProgress{started: time.Now()}
@@ -681,10 +741,6 @@ func (a *agent) send() error {
 	c.status = ""
 	a.flush()
 	p := a.permission()
-	prompt = skillPrompt(prompt, skills)
-	a.turnInputs = append(a.turnInputs[:0], input{Type: "text", Text: attachmentPrompt(prompt, files)})
-	a.turnInputs = appendSkillInputs(a.turnInputs, prompt)
-	defer func() { clear(a.turnInputs); a.turnInputs = a.turnInputs[:0] }()
 	params := struct {
 		ThreadID      string        `json:"threadId"`
 		Input         []input       `json:"input"`
@@ -692,7 +748,7 @@ func (a *agent) send() error {
 		Effort        string        `json:"effort,omitempty"`
 		SandboxPolicy sandboxPolicy `json:"sandboxPolicy"`
 		approvalSettings
-	}{c.ID, a.turnInputs, a.model, a.turnEffort(), p.policy, p.approvalSettings}
+	}{c.ID, inputs, a.model, a.turnEffort(), p.policy, p.approvalSettings}
 	result, err := call[struct {
 		Turn turn `json:"turn"`
 	}](a.client, "turn/start", params)
@@ -702,6 +758,9 @@ func (a *agent) send() error {
 		c.dirty = true
 		return err
 	}
+	if c.files != nil && c.files.id == "" {
+		c.files.id, c.files.ref = result.Turn.ID, "changes/"+result.Turn.ID
+	}
 	a.setBusy(c, c.busy && result.Turn.Status == "inProgress")
 	if c.busy {
 		c.turnID = result.Turn.ID
@@ -709,17 +768,8 @@ func (a *agent) send() error {
 	} else {
 		c.finishProgress(result.Turn, time.Now())
 	}
-	c.draft = ""
-	delete(a.attachments, a.attachmentScope())
-	delete(a.skills, a.attachmentScope())
-	if fresh {
-		delete(a.drafts, a.context.ProjectPath)
-	}
 	a.status = ""
 	a.workspaceDirty, c.dirty = true, true
-	if c.Name == "" && c.titleJob == nil {
-		a.generateTitle(c, attachmentPrompt(prompt, files))
-	}
 	return nil
 }
 
@@ -840,6 +890,14 @@ func (a *agent) resume(id string) error {
 			a.closeClient()
 			return err
 		}
+		for c.editing != nil && !c.editReverted && !slices.Contains(c.items, c.editing) && c.cursor != "" {
+			if err = a.readHistory(c); err != nil {
+				return err
+			}
+		}
+		if c.editing != nil && c.editReverted {
+			c.items = append(c.items, c.editing)
+		}
 	}
 	a.history.include(c.thread)
 	a.showHistory = true
@@ -893,10 +951,8 @@ func (a *agent) readHistory(c *conversation) error {
 		if files == nil {
 			files = newTurnFiles(t.ID, c.context.ProjectPath)
 		}
-		var progress *turnProgress
-		if c.progress != nil && c.progress.id == t.ID {
-			progress = c.progress
-		} else if t.DurationMs != nil || t.StartedAt > 0 && t.CompletedAt > 0 {
+		progress := c.turnProgress(t.ID)
+		if progress == nil && (t.DurationMs != nil || t.StartedAt > 0 && t.CompletedAt > 0) {
 			progress = &turnProgress{}
 			progress.update(t, time.Now())
 		}
@@ -915,6 +971,7 @@ func (a *agent) readHistory(c *conversation) error {
 				i := newChatItem(item, t.Status != "inProgress")
 				i.progress = progress
 				i.files = files
+				i.setSentAt(t.StartedAt)
 				if progress != nil && i.modelText() {
 					progress.received = true
 				}
@@ -924,6 +981,14 @@ func (a *agent) readHistory(c *conversation) error {
 		files.complete = files.complete || t.Status != "inProgress"
 	}
 	c.items = append(older, c.items...)
+	if c.editing != nil {
+		for _, i := range c.items {
+			if i.data.ID == c.editing.data.ID {
+				c.editing = i
+				break
+			}
+		}
+	}
 	c.cursor = page.NextCursor
 	c.dirty = true
 	return nil
@@ -938,12 +1003,20 @@ func newChatItem(item threadItem, complete bool) *chatItem {
 func (i *chatItem) replace(item threadItem, complete bool) {
 	i.data, i.complete = item, complete
 	i.html = ""
+	if item.StartedAtMs > 0 {
+		i.sentAt = time.UnixMilli(item.StartedAtMs)
+	}
 	i.text.Reset()
 	i.output.Reset()
+	clear(i.images)
+	i.images = i.images[:0]
 	appendText(&i.text, item.Text)
 	for _, part := range item.Content {
 		if part.Type == "text" {
 			appendText(&i.text, part.Text)
+		} else if part.Type == "image" || part.Type == "localImage" {
+			preview, _ := imagePreview(part.URL)
+			i.images = append(i.images, preview)
 		}
 	}
 	if item.Type == "reasoning" {
@@ -1008,14 +1081,15 @@ func (a *agent) onMessage(message envelope) {
 		return
 	}
 	var event struct {
-		ThreadID   string          `json:"threadId"`
-		ItemID     string          `json:"itemId"`
-		Delta      string          `json:"delta"`
-		ThreadName string          `json:"threadName"`
-		RequestID  json.RawMessage `json:"requestId"`
-		Item       threadItem      `json:"item"`
-		Turn       turn            `json:"turn"`
-		Error      *rpcError       `json:"error"`
+		ThreadID    string          `json:"threadId"`
+		ItemID      string          `json:"itemId"`
+		Delta       string          `json:"delta"`
+		ThreadName  string          `json:"threadName"`
+		RequestID   json.RawMessage `json:"requestId"`
+		Item        threadItem      `json:"item"`
+		Turn        turn            `json:"turn"`
+		Error       *rpcError       `json:"error"`
+		StartedAtMs int64           `json:"startedAtMs"`
 	}
 	if err := json.Unmarshal(message.Params, &event); err != nil {
 		fmt.Fprintln(stderrWriter, err)
@@ -1051,6 +1125,10 @@ func (a *agent) onMessage(message envelope) {
 			i.files.add(event.Item)
 		}
 		i.replace(event.Item, message.Method == "item/completed")
+		if event.StartedAtMs > 0 {
+			i.sentAt = time.UnixMilli(event.StartedAtMs)
+		}
+		i.setSentAt(time.Now().Unix())
 		if i.progress != nil && i.modelText() {
 			i.progress.received = true
 		}

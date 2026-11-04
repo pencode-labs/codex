@@ -81,6 +81,30 @@ func (i *chatItem) activityKinds() activityKind {
 	return 0
 }
 
+func (i *chatItem) activityStatus() string {
+	data := &i.data
+	if data.Type != "commandExecution" || data.Status != "failed" || data.ExitCode == nil || *data.ExitCode != 1 || i.output.Len() != 0 || len(data.CommandActions) != 1 {
+		return data.Status
+	}
+	action := &data.CommandActions[0]
+	if action.Type != "search" && action.Type != "listFiles" {
+		return data.Status
+	}
+	// rg reports no matches with exit code 1. Only treat a standalone query
+	// with no diagnostics as an empty result; compound commands may fail elsewhere.
+	command := strings.TrimSpace(action.Command)
+	if strings.ContainsAny(command, "|;&\n\r`$<>") {
+		return data.Status
+	}
+	if end := strings.IndexAny(command, " \t"); end >= 0 {
+		command = command[:end]
+	}
+	if filepath.Base(command) == "rg" {
+		return "completed"
+	}
+	return data.Status
+}
+
 func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, sweep bool) []peb.EditorBinding {
 	first := items[0]
 	if first.groupRef == "" {
@@ -91,7 +115,7 @@ func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items
 	for _, i := range items {
 		kinds |= i.activityKinds()
 		// Keep failures visible even when the group is collapsed or still running.
-		switch i.data.Status {
+		switch i.activityStatus() {
 		case "failed":
 			failed = true
 		case "declined":

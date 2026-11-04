@@ -39,14 +39,14 @@ func (a *agent) handleLifecycle(event peb.LifecycleEvent) peb.LifecycleReply {
 			delete(a.conversations, id)
 		}
 		delete(a.drafts, event.ProjectPath)
+		for scope := range a.images {
+			if scope.project == event.ProjectPath {
+				delete(a.images, scope)
+			}
+		}
 		for scope := range a.attachments {
 			if scope.project == event.ProjectPath {
 				delete(a.attachments, scope)
-			}
-		}
-		for scope := range a.skills {
-			if scope.project == event.ProjectPath {
-				delete(a.skills, scope)
 			}
 		}
 		if len(a.conversations) == 0 {

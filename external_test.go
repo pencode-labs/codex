@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -61,6 +60,7 @@ func testLiveIndependentServerObservation(t *testing.T, stop bool) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	liveAppServer(t, root, "")
 	a := &agent{ctx: t.Context(), context: peb.ActionContext{ProjectPath: root}, conversations: make(map[string]*conversation)}
 	defer a.closeClient()
 	c, err := a.startThread()
@@ -79,21 +79,8 @@ func testLiveIndependentServerObservation(t *testing.T, stop bool) {
 		t.Fatal("local provider was not reached")
 	}
 	socket := filepath.Join(os.Getenv("CODEX_HOME"), "observer.sock")
-	cmd := exec.CommandContext(t.Context(), os.Getenv("PENCODE_CODEX_PATH"), "app-server", "--listen", "unix://"+socket)
-	if err = cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	liveAppServer(t, root, "unix://"+socket)
 	deadline := time.Now().Add(8 * time.Second)
-	for {
-		if _, err = os.Stat(socket); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("observer socket not created", err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 	b := &agent{ctx: t.Context(), context: a.context, serverURL: "unix://" + socket, conversations: make(map[string]*conversation), workspaceOpen: true}
 	defer b.closeClient()
 	if err = b.resume(c.ID); err != nil {

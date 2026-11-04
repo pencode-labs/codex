@@ -150,10 +150,7 @@ func (a *agent) reconcileObserved(c *conversation, turns []turn) {
 		if previous != nil {
 			files.collapsed = previous.collapsed
 		}
-		var progress *turnProgress
-		if c.progress != nil && c.progress.id == t.ID {
-			progress = c.progress
-		}
+		progress := c.turnProgress(t.ID)
 		if progress != nil || t.StartedAt > 0 || t.DurationMs != nil {
 			if progress == nil {
 				progress = &turnProgress{}
@@ -174,6 +171,7 @@ func (a *agent) reconcileObserved(c *conversation, turns []turn) {
 			}
 			item.replace(data, t.Status != "inProgress")
 			item.files, item.progress = files, progress
+			item.setSentAt(t.StartedAt)
 			if progress != nil && item.modelText() {
 				progress.received = true
 			}

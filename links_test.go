@@ -9,6 +9,16 @@ import (
 	"github.com/pencode-labs/pencode/peb"
 )
 
+func TestChatMarkdownRetainsLineBreaksAndEmoji(t *testing.T) {
+	var b strings.Builder
+	renderMarkdown(&b, "第一行\n第二行\n\n下一段\n\n```text\nfirst\n\nlast\n```\n\n| 名称 | 是否通过 |\n| --- | --- |\n| 正常 | ✅ |\n| 超出 | ❌ |", "", "message")
+	for _, want := range []string{"第一行<br>\n第二行", "<p>下一段</p>", "first\n\nlast\n", "<td>✅</td>", "<td>❌</td>"} {
+		if !strings.Contains(b.String(), want) {
+			t.Fatalf("missing %q in %s", want, b.String())
+		}
+	}
+}
+
 func TestChatLinksRenderTargetsAndIcons(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {

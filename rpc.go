@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -51,13 +52,6 @@ func startClient(parent context.Context, root, path, serverURL string, handle fu
 	serverURL = strings.TrimSpace(serverURL)
 	if serverURL == "" {
 		serverURL = strings.TrimSpace(os.Getenv("PENCODE_CODEX_SERVER_URL"))
-	}
-	if serverURL == "" {
-		var err error
-		path, err = resolveExecutablePath(root, path)
-		if err != nil {
-			return nil, err
-		}
 	}
 	ctx, cancel := context.WithCancel(parent)
 	c := &rpcClient{ctx: ctx, cancel: cancel, messages: make(chan envelope, 128), done: make(chan struct{}), ready: make(chan struct{}), handle: handle}
@@ -122,6 +116,25 @@ func (w socketWriter) Write(data []byte) (int, error) {
 
 func connectServer(ctx context.Context, root, path, endpoint string) (*websocket.Conn, error) {
 	if endpoint == "" {
+		endpoint, err := defaultServerURL(root)
+		if err != nil {
+			return nil, err
+		}
+		probe, cancel := context.WithTimeout(ctx, time.Second)
+		conn, err := dialServer(probe, endpoint)
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		// Only an absent listener permits startup. Authentication, permissions,
+		// handshake failures and timeouts must not spawn another shared server.
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED) {
+			return nil, err
+		}
+		path, err = resolveExecutablePath(root, path)
+		if err != nil {
+			return nil, err
+		}
 		cmd := exec.CommandContext(ctx, path, "app-server", "daemon", "start")
 		cmd.Dir, cmd.Stderr, cmd.WaitDelay = root, stderrWriter, time.Second
 		if runtime.GOOS == "darwin" {
@@ -143,12 +156,46 @@ func connectServer(ctx context.Context, root, path, endpoint string) (*websocket
 		if !filepath.IsAbs(daemon.SocketPath) {
 			return nil, fmt.Errorf("Codex daemon 未返回绝对 socketPath，请检查 CLI 版本或设置共享服务地址")
 		}
-		endpoint = "unix://" + daemon.SocketPath
+		return dialServer(ctx, "unix://"+daemon.SocketPath)
 	}
+	if endpoint == "unix://" {
+		var err error
+		endpoint, err = defaultServerURL(root)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dialServer(ctx, endpoint)
+}
+
+// Codex publishes its default control socket here, including a symlink when
+// CODEX_HOME is too long for a Unix socket.
+func defaultServerURL(root string) (string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("读取 Codex 用户目录：%w", err)
+		}
+		home = filepath.Join(home, ".codex")
+	} else if !filepath.IsAbs(home) {
+		home = filepath.Join(root, home)
+	}
+	return "unix://" + filepath.Join(home, "app-server-control", "app-server-control.sock"), nil
+}
+
+func dialServer(ctx context.Context, endpoint string) (*websocket.Conn, error) {
 	var options websocket.DialOptions
 	if socket, ok := strings.CutPrefix(endpoint, "unix://"); ok {
 		if !filepath.IsAbs(socket) {
 			return nil, fmt.Errorf("Codex Unix socket 路径必须是绝对路径：%q", socket)
+		}
+		// Resolve before dial: sockaddr_un limits the supplied path length,
+		// even when that path is a symlink to a short socket in /tmp.
+		socket, err := filepath.EvalSymlinks(socket)
+		if err != nil {
+			return nil, fmt.Errorf("解析 Codex socket：%w", err)
 		}
 		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socket)

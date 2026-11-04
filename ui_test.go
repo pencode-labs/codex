@@ -8,6 +8,50 @@ import (
 	"github.com/pencode-labs/pencode/peb"
 )
 
+func TestChatStatusFollowsCurrentTurnProgress(t *testing.T) {
+	for _, scenario := range []string{"waiting", "reply", "activity", "no-user-item", "reply-without-user"} {
+		t.Run(scenario, func(t *testing.T) {
+			previous := &turnProgress{id: "previous", complete: true}
+			current := &turnProgress{id: "current"}
+			item := func(id, kind string, progress *turnProgress) *chatItem {
+				i := newChatItem(threadItem{ID: id, Type: kind, Text: id}, true)
+				i.progress = progress
+				return i
+			}
+			c := &conversation{progress: current, status: "Reconnecting... 4/5", items: []*chatItem{
+				item("old-user", "userMessage", previous),
+				item("old-reply", "agentMessage", previous),
+			}}
+			if scenario != "no-user-item" && scenario != "reply-without-user" {
+				c.items = append(c.items, item("current-user", "userMessage", current))
+			}
+			outputRef := ""
+			if scenario == "reply" || scenario == "reply-without-user" {
+				c.items = append(c.items, item("current-output", "agentMessage", current))
+				outputRef = `data-ref="message/current-output"`
+			} else if scenario == "activity" {
+				c.items = append(c.items, item("current-output", "commandExecution", current))
+				outputRef = `data-ref="activity/current-output/region"`
+			}
+			a := &agent{selected: c}
+			view := a.composerView()
+			progress := strings.Index(view.HTML, `data-ref="progress/current"`)
+			status := strings.Index(view.HTML, c.status)
+			if progress < 0 || status < progress || strings.Count(view.HTML, c.status) != 1 {
+				t.Fatal("status must appear once below the current turn progress", view.HTML)
+			}
+			if outputRef != "" {
+				if output := strings.Index(view.HTML, outputRef); output < status {
+					t.Fatal("status must precede current turn output", view.HTML)
+				}
+			}
+			if status > strings.Index(view.HTML, `<section class="codex-composer">`) {
+				t.Fatal("status escaped the transcript", view.HTML)
+			}
+		})
+	}
+}
+
 func TestActivityDetailsSurviveUpdates(t *testing.T) {
 	item := threadItem{ID: `cmd"1`, Type: "commandExecution", Status: "inProgress", Command: "echo '<script>'"}
 	i := newChatItem(item, false)
@@ -53,7 +97,7 @@ func TestFileActivityEscapesDiffDetails(t *testing.T) {
 	i.groupExpanded, i.expanded, i.html = true, true, ""
 	view = a.composerView()
 	validateBindings(t, view)
-	if !strings.Contains(view.HTML, "&lt;file&gt;.go") || !strings.Contains(view.HTML, "+&lt;script&gt;") {
+	if !strings.Contains(view.HTML, "&lt;file&gt;.go") || !strings.Contains(view.HTML, `<span class="codex-diff-added">+&lt;script&gt;</span>`) {
 		t.Fatal("file details were lost or not escaped", view.HTML)
 	}
 }

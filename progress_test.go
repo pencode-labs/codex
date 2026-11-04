@@ -60,14 +60,14 @@ func TestTurnProgressLifecycle(t *testing.T) {
 				t.Fatal("completion did not use the server duration", c.progress)
 			}
 			a.updateProgress(time.Now().Add(time.Hour))
-			if !strings.Contains(a.composerView().HTML, "已处理 2分钟 5秒") {
+			if !strings.Contains(a.composerView().HTML, "用时 2m 5s") {
 				t.Fatal("completed elapsed time changed")
 			}
 			checkSweep(false)
 			first := c.progress
 			notify("turn/started", `{"threadId":"thread","turn":{"id":"two","status":"inProgress"}}`)
 			view = a.composerView()
-			if c.progress == first || strings.Count(view.HTML, `class="codex-turn-progress"`) != 2 || !strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "已处理 2分钟 5秒") {
+			if c.progress == first || strings.Count(view.HTML, `class="codex-turn-progress"`) != 2 || !strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "用时 2m 5s") {
 				t.Fatal("new turn must preserve the previous turn's duration", view.HTML)
 			}
 			checkSweep(true)
@@ -113,7 +113,7 @@ func TestTurnProgressPreservesEmptyFailedTurn(t *testing.T) {
 		a.onMessage(envelope{Method: event.method, Params: json.RawMessage(event.params)})
 	}
 	view := a.composerView()
-	if strings.Count(view.HTML, `class="codex-turn-progress"`) != 2 || !strings.Contains(view.HTML, "已处理 5秒") || !strings.Contains(view.HTML, "正在思考") {
+	if strings.Count(view.HTML, `class="codex-turn-progress"`) != 2 || !strings.Contains(view.HTML, "用时 5s") || !strings.Contains(view.HTML, "正在思考") {
 		t.Fatal("a turn without model output lost its duration", view.HTML)
 	}
 }
@@ -157,7 +157,7 @@ func TestHistoryRestoresTurnDuration(t *testing.T) {
 	}
 	defer a.client.close()
 	view := a.composerView()
-	if strings.Count(view.HTML, "已处理 1分钟 52秒") != 1 || strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "Stored conversation") {
+	if strings.Count(view.HTML, "用时 1m 52s") != 1 || strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "Stored conversation") {
 		t.Fatal("history lost the server's turn duration", view.HTML)
 	}
 	t.Setenv("PENCODE_CODEX_TURN_DURATION", "started-only")
@@ -168,7 +168,7 @@ func TestHistoryRestoresTurnDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.client.close()
-	if strings.Contains(a.composerView().HTML, "已处理") {
+	if strings.Contains(a.composerView().HTML, "用时") {
 		t.Fatal("history without a duration or end timestamp must not estimate elapsed time")
 	}
 }

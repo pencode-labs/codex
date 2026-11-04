@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"html"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +17,14 @@ import (
 
 func completionInput(value string, caret int) peb.EditorEvent {
 	return peb.EditorEvent{Kind: "input", Ref: "prompt", Value: value, Anchor: uint32(caret), Focus: uint32(caret)}
+}
+
+func TestMarkdownReferenceEscapesLabelsAndPaths(t *testing.T) {
+	skill := skillOption{Name: `review [中文]`, Path: "/skills/space (dir)/SKILL.md"}
+	skill.prepare()
+	if want := `[review \[中文\]](/skills/space%20%28dir%29/SKILL.md)`; skill.reference != want {
+		t.Fatalf("skill reference = %q, want %q", skill.reference, want)
+	}
 }
 
 func TestCompletionToken(t *testing.T) {
@@ -93,13 +104,17 @@ func TestSlashCompletionSkills(t *testing.T) {
 		t.Fatal("skill filtering failed", a.completion)
 	}
 	key("accept")
-	if a.completion.kind != 0 || a.draft() != "" || len(a.skills[a.attachmentScope()]) != 1 || a.selected != nil || a.client != nil {
-		t.Fatal("skill selection must prepare a chip without sending it or inserting Markdown")
+	reference := a.completion.skills[0].reference + " "
+	if !strings.HasPrefix(reference, "[code-review](") {
+		t.Fatal("skill label retained a completion prefix", reference)
+	}
+	if a.completion.kind != 0 || a.draft() != reference || a.selected != nil || a.client != nil {
+		t.Fatal("skill selection must insert its Markdown link without sending it", a.draft())
 	}
 	view = a.composerView()
 	validateBindings(t, view)
-	if !strings.Contains(view.HTML, `data-pencode-caret="0:`) || !strings.Contains(view.HTML, `data-ref="remove-skill/0"`) || !strings.Contains(view.HTML, ">Code Review</span>") || strings.Contains(view.HTML, "[$code-review]") {
-		t.Fatal("skill chip or input caret missing", view.HTML)
+	if !strings.Contains(view.HTML, `data-pencode-markdown-links`) || !strings.Contains(view.HTML, `data-pencode-caret="`+strconv.Itoa(utf8.RuneCountInString(reference))+`:`) || !strings.Contains(view.HTML, html.EscapeString(reference)+"</textarea>") {
+		t.Fatal("skill Markdown or input caret missing", view.HTML)
 	}
 	input("/new")
 	key("accept")
@@ -117,7 +132,7 @@ func TestSlashCompletionSkills(t *testing.T) {
 	}
 }
 
-func TestMentionCompletionInsertsAtCaretAndAttachesFile(t *testing.T) {
+func TestMentionCompletionInsertsLinkAtCaret(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"src/中文 [notes].go", "other/中文.go", "node_modules/中文.js", ".git/中文"} {
 		path := filepath.Join(root, name)
@@ -134,7 +149,7 @@ func TestMentionCompletionInsertsAtCaretAndAttachesFile(t *testing.T) {
 	caret := utf8.RuneCountInString("请检查 @src/中文")
 	a.setDraft(value)
 	a.updateCompletion(completionInput(value, caret))
-	if a.completion.count != 1 || a.completion.items[0].path != "src/中文 [notes].go" || len(a.completion.files) != 2 {
+	if a.completion.count != 1 || a.completion.items[0].path != "src/中文 [notes].go" || len(a.completion.files) != 4 {
 		t.Fatal("project filtering failed", a.completion)
 	}
 	view := a.composerView()
@@ -145,12 +160,11 @@ func TestMentionCompletionInsertsAtCaretAndAttachesFile(t *testing.T) {
 	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "click", Ref: "completion/0"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(a.draft(), `请检查 [@中文 \[notes\].go](src/`) || !strings.HasSuffix(a.draft(), " ，然后继续") || strings.Contains(a.draft(), "@src/") {
+	if !strings.HasPrefix(a.draft(), `请检查 [中文 \[notes\].go](src/`) || !strings.HasSuffix(a.draft(), " ，然后继续") || strings.Contains(a.draft(), "@src/") {
 		t.Fatal("mention corrupted surrounding text", a.draft())
 	}
-	files := a.attachments[a.attachmentScope()]
-	if len(files) != 1 || files[0] != filepath.Join(root, "src/中文 [notes].go") || !strings.Contains(attachmentPrompt(a.draft(), files), files[0]) {
-		t.Fatal("mention was not attached as task context", files)
+	if len(a.attachments) != 0 {
+		t.Fatal("mention must only insert its Markdown link")
 	}
 	if a.completion.caret != utf8.RuneCountInString(strings.TrimSuffix(a.draft(), "，然后继续")) {
 		t.Fatal("caret did not follow inserted mention", a.completion.caret)
@@ -162,6 +176,80 @@ func TestMentionCompletionInsertsAtCaretAndAttachesFile(t *testing.T) {
 	a.updateCompletion(completionInput("@", 1))
 	if a.completion.count != 0 || len(a.completion.files) != 0 {
 		t.Fatal("project switch retained file candidates")
+	}
+}
+
+func TestMentionCompletionIncludesEmptyDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"src/空 [目录]", "node_modules/hidden", ".git/hidden"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &agent{context: peb.ActionContext{ProjectPath: root}}
+	a.setDraft("查看 @目录 后续")
+	a.updateCompletion(completionInput(a.draft(), utf8.RuneCountInString("查看 @目录")))
+	if a.completion.count != 1 || a.completion.items[0].path != "src/空 [目录]/" || len(a.completion.files) != 2 {
+		t.Fatal("directory search included ignored paths or missed an empty directory", a.completion)
+	}
+	if err := a.handleCompletion(peb.EditorEvent{Kind: "click", Data: "accept"}); err != nil {
+		t.Fatal(err)
+	}
+	want := `查看 [空 \[目录\]/](src/%E7%A9%BA%20%5B%E7%9B%AE%E5%BD%95%5D/)  后续`
+	if a.draft() != want || len(a.attachments) != 0 {
+		t.Fatalf("directory mention = %q; want %q", a.draft(), want)
+	}
+}
+
+func TestCompletionLinksSendVerbatimAndRetry(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "目录"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes [a].md"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &conversation{thread: thread{ID: "saved", Name: "task"}, context: peb.ActionContext{ProjectPath: root}, loaded: true}
+	a := &agent{context: c.context, selected: c}
+	skill := skillOption{Name: "review", Path: filepath.Join(root, "skill space", "SKILL.md")}
+	skill.prepare()
+	a.completion.skills, a.completion.skillsLoaded = []skillOption{skill}, true
+	for _, token := range []string{"/review", "@notes", "@目录"} {
+		a.setDraft(a.draft() + token)
+		e := completionInput(a.draft(), utf8.RuneCountInString(a.draft()))
+		a.updateCompletion(e)
+		if a.completion.count != 1 {
+			t.Fatal("missing completion", token, a.completion)
+		}
+		e.Kind, e.Data = "completion", "accept"
+		if err := a.handleCompletion(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prompt := a.draft() + "\n检查这些内容，保留  空格。\n"
+	a.setDraft(prompt)
+	var output bytes.Buffer
+	a.client = &rpcClient{ctx: t.Context(), writer: json.NewEncoder(&output), messages: make(chan envelope, 2)}
+	a.client.messages <- envelope{ID: json.RawMessage(`1`), Error: &rpcError{Code: -32000, Message: "retry"}}
+	a.client.messages <- envelope{ID: json.RawMessage(`2`), Result: json.RawMessage(`{"turn":{"id":"turn","status":"completed"}}`)}
+	if err := a.send(); err == nil || a.draft() != prompt || c.busy {
+		t.Fatal("failed send lost the Markdown draft", err)
+	}
+	if err := a.send(); err != nil || a.draft() != "" {
+		t.Fatal("successful retry did not clear the draft", err)
+	}
+	decoder := json.NewDecoder(&output)
+	for range 2 {
+		var request struct {
+			Method string
+			Params struct{ Input []input }
+		}
+		if err := decoder.Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Method != "turn/start" || len(request.Params.Input) != 1 || request.Params.Input[0].Type != "text" || request.Params.Input[0].Text != prompt {
+			t.Fatalf("Markdown was changed or augmented before sending: %+v", request)
+		}
 	}
 }
 

@@ -146,3 +146,86 @@ func TestActivityCommandActionsAndFileSummary(t *testing.T) {
 		t.Fatal("third level should show the full path and diff", view.HTML)
 	}
 }
+
+func TestActivityEmptyRipgrepResult(t *testing.T) {
+	const result = `{"id":"cmd","type":"commandExecution","command":"/bin/zsh -lc 'rg --files -g AGENTS.md xiuxing-server xiuxing-protobuf'","status":"failed","exitCode":1,"aggregatedOutput":"","commandActions":[{"type":"listFiles","path":"xiuxing-server","command":"rg --files -g AGENTS.md xiuxing-server xiuxing-protobuf"}]}`
+	for _, source := range []string{"history", "stream"} {
+		t.Run(source, func(t *testing.T) {
+			c := &conversation{thread: thread{ID: "thread"}}
+			a := &agent{selected: c, conversations: map[string]*conversation{c.ID: c}}
+			if source == "history" {
+				var item threadItem
+				if err := json.Unmarshal([]byte(result), &item); err != nil {
+					t.Fatal(err)
+				}
+				c.items = []*chatItem{newChatItem(item, true)}
+			} else {
+				a.onMessage(envelope{Method: "item/started", Params: json.RawMessage(`{"threadId":"thread","item":{"id":"cmd","type":"commandExecution","status":"inProgress"}}`)})
+				if !strings.Contains(a.composerView().HTML, "进行中") {
+					t.Fatal("missing running status")
+				}
+				a.onMessage(envelope{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread","item":` + result + `}`)})
+			}
+			i := c.items[0]
+			if i.data.Status != "failed" || i.data.ExitCode == nil || *i.data.ExitCode != 1 {
+				t.Fatal("server result was lost", i.data)
+			}
+			for _, expanded := range []bool{false, true} {
+				i.groupExpanded = expanded
+				view := a.composerView()
+				validateBindings(t, view)
+				if strings.Contains(view.HTML, "失败") || strings.Contains(view.HTML, "进行中") {
+					t.Fatal("empty query must finish without a failure badge", view.HTML)
+				}
+			}
+			clickActivity(t, a, i.detailRef)
+			if !strings.Contains(a.composerView().HTML, "rg --files -g AGENTS.md") {
+				t.Fatal("empty result lost its command details")
+			}
+		})
+	}
+}
+
+func TestActivityCommandFailureBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, command, kind, exit, output, status string
+		failed                                    bool
+	}{
+		{"empty search", "rg missing src", "search", "1", "", "failed", false},
+		{"absolute ripgrep", "/usr/bin/rg\t--files", "listFiles", "1", "", "failed", false},
+		{"search error", "rg missing src", "search", "2", "", "failed", true},
+		{"diagnostic", "rg --files missing", "listFiles", "1", "permission denied", "failed", true},
+		{"unknown exit", "rg --files", "listFiles", "null", "", "failed", true},
+		{"missing exit", "rg --files", "listFiles", "", "", "failed", true},
+		{"authoritative failure", "rg --files", "listFiles", "0", "", "failed", true},
+		{"other command", "ls missing", "listFiles", "1", "", "failed", true},
+		{"test failure", "go test ./...", "unknown", "1", "", "failed", true},
+		{"unclassified command", "rg --files", "unknown", "1", "", "failed", true},
+		{"compound command", "rg --files && false", "listFiles", "1", "", "failed", true},
+		{"pipeline", "rg --files | false", "listFiles", "1", "", "failed", true},
+		{"success", "rg --files", "listFiles", "0", "AGENTS.md", "completed", false},
+		{"running", "rg --files", "listFiles", "null", "", "inProgress", false},
+		{"declined", "rg --files", "listFiles", "1", "", "declined", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := threadItem{ID: "cmd", Type: "commandExecution", Command: tc.command, Status: tc.status, AggregatedOutput: tc.output, CommandActions: []commandAction{{Type: tc.kind, Command: tc.command}}}
+			if tc.exit != "" {
+				if err := json.Unmarshal([]byte(tc.exit), &item.ExitCode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			i := newChatItem(item, tc.status != "inProgress")
+			a := &agent{selected: &conversation{items: []*chatItem{i}}}
+			for _, expanded := range []bool{false, true} {
+				i.groupExpanded = expanded
+				view := a.composerView()
+				if strings.Contains(view.HTML, "失败") != tc.failed {
+					t.Fatal("incorrect command failure badge", view.HTML)
+				}
+				if (tc.status == "inProgress" && !strings.Contains(view.HTML, "进行中")) || (tc.status == "declined" && !strings.Contains(view.HTML, "已拒绝")) {
+					t.Fatal("lost running or declined status", view.HTML)
+				}
+			}
+		})
+	}
+}
