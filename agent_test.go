@@ -27,6 +27,11 @@ func TestMain(m *testing.M) {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(2)
 			}
+		} else if len(os.Args) > 2 && os.Args[2] == "proxy" {
+			if err := fixtureProxy(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
 		} else if len(os.Args) > 2 && os.Args[2] == "fixture-listen" {
 			path, _ := os.Executable()
 			server, closeServer := fixtureWebSocket(context.Background(), path)
@@ -157,10 +162,10 @@ func fixtureServer() {
 			}
 		case "thread/start":
 			var p struct {
-				Ephemeral        bool                       `json:"ephemeral"`
-				Model            string                     `json:"model"`
 				Config           map[string]json.RawMessage `json:"config"`
+				Model            string                     `json:"model"`
 				BaseInstructions string                     `json:"baseInstructions"`
+				Ephemeral        bool                       `json:"ephemeral"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			if p.Ephemeral && p.Model != "gpt-6-luna" {
@@ -264,9 +269,9 @@ func fixtureServer() {
 		case "turn/start":
 			var p struct {
 				ThreadID string  `json:"threadId"`
-				Input    []input `json:"input"`
 				Model    string  `json:"model"`
 				Effort   string  `json:"effort"`
+				Input    []input `json:"input"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			if titleThreads[p.ThreadID] {

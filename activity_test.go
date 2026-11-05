@@ -55,8 +55,8 @@ func TestActivityGroupThreeLevelsAndStreaming(t *testing.T) {
 	cmd.replace(threadItem{ID: "cmd", Type: "commandExecution", Command: "go test ./...", Status: "failed", AggregatedOutput: "<failed>"}, true)
 	view = a.composerView()
 	validateBindings(t, view)
-	if strings.Contains(view.HTML, "<pre>") || strings.Contains(view.HTML, `data-ref="item/cmd"`) || !strings.Contains(view.HTML, "失败") {
-		t.Fatal("collapsed group should hide details and their bindings but retain failure", view.HTML)
+	if strings.Contains(view.HTML, "<pre>") || strings.Contains(view.HTML, `data-ref="item/cmd"`) || strings.Contains(view.HTML, "失败") {
+		t.Fatal("collapsed group should hide details, their bindings and failure badges", view.HTML)
 	}
 	clickActivity(t, a, thinking.groupRef)
 	view = a.composerView()
@@ -186,26 +186,25 @@ func TestActivityEmptyRipgrepResult(t *testing.T) {
 	}
 }
 
-func TestActivityCommandFailureBoundaries(t *testing.T) {
+func TestActivityCommandStatusBadges(t *testing.T) {
 	for _, tc := range []struct {
 		name, command, kind, exit, output, status string
-		failed                                    bool
 	}{
-		{"empty search", "rg missing src", "search", "1", "", "failed", false},
-		{"absolute ripgrep", "/usr/bin/rg\t--files", "listFiles", "1", "", "failed", false},
-		{"search error", "rg missing src", "search", "2", "", "failed", true},
-		{"diagnostic", "rg --files missing", "listFiles", "1", "permission denied", "failed", true},
-		{"unknown exit", "rg --files", "listFiles", "null", "", "failed", true},
-		{"missing exit", "rg --files", "listFiles", "", "", "failed", true},
-		{"authoritative failure", "rg --files", "listFiles", "0", "", "failed", true},
-		{"other command", "ls missing", "listFiles", "1", "", "failed", true},
-		{"test failure", "go test ./...", "unknown", "1", "", "failed", true},
-		{"unclassified command", "rg --files", "unknown", "1", "", "failed", true},
-		{"compound command", "rg --files && false", "listFiles", "1", "", "failed", true},
-		{"pipeline", "rg --files | false", "listFiles", "1", "", "failed", true},
-		{"success", "rg --files", "listFiles", "0", "AGENTS.md", "completed", false},
-		{"running", "rg --files", "listFiles", "null", "", "inProgress", false},
-		{"declined", "rg --files", "listFiles", "1", "", "declined", false},
+		{"empty search", "rg missing src", "search", "1", "", "failed"},
+		{"absolute ripgrep", "/usr/bin/rg\t--files", "listFiles", "1", "", "failed"},
+		{"search error", "rg missing src", "search", "2", "", "failed"},
+		{"diagnostic", "rg --files missing", "listFiles", "1", "permission denied", "failed"},
+		{"unknown exit", "rg --files", "listFiles", "null", "", "failed"},
+		{"missing exit", "rg --files", "listFiles", "", "", "failed"},
+		{"authoritative failure", "rg --files", "listFiles", "0", "", "failed"},
+		{"other command", "ls missing", "listFiles", "1", "", "failed"},
+		{"test failure", "go test ./...", "unknown", "1", "", "failed"},
+		{"unclassified command", "rg --files", "unknown", "1", "", "failed"},
+		{"compound command", "rg --files && false", "listFiles", "1", "", "failed"},
+		{"pipeline", "rg --files | false", "listFiles", "1", "", "failed"},
+		{"success", "rg --files", "listFiles", "0", "AGENTS.md", "completed"},
+		{"running", "rg --files", "listFiles", "null", "", "inProgress"},
+		{"declined", "rg --files", "listFiles", "1", "", "declined"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			item := threadItem{ID: "cmd", Type: "commandExecution", Command: tc.command, Status: tc.status, AggregatedOutput: tc.output, CommandActions: []commandAction{{Type: tc.kind, Command: tc.command}}}
@@ -219,7 +218,7 @@ func TestActivityCommandFailureBoundaries(t *testing.T) {
 			for _, expanded := range []bool{false, true} {
 				i.groupExpanded = expanded
 				view := a.composerView()
-				if strings.Contains(view.HTML, "失败") != tc.failed {
+				if strings.Contains(view.HTML, "失败") {
 					t.Fatal("incorrect command failure badge", view.HTML)
 				}
 				if (tc.status == "inProgress" && !strings.Contains(view.HTML, "进行中")) || (tc.status == "declined" && !strings.Contains(view.HTML, "已拒绝")) {

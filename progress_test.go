@@ -83,12 +83,12 @@ func TestTurnProgressTimingSources(t *testing.T) {
 		turn turn
 		want time.Duration
 	}{
-		{"server", turn{Status: "completed", DurationMs: &server, StartedAt: 100, CompletedAt: 200}, 112 * time.Second},
-		{"zero", turn{Status: "completed", DurationMs: &zero}, 0},
-		{"timestamps", turn{Status: "completed", StartedAt: 100, CompletedAt: 212}, 112 * time.Second},
-		{"local", turn{Status: "completed"}, 10 * time.Second},
-		{"interrupted", turn{Status: "interrupted"}, 10 * time.Second},
-		{"failed", turn{Status: "failed"}, 10 * time.Second},
+		{name: "server", turn: turn{Status: "completed", DurationMs: &server, StartedAt: 100, CompletedAt: 200}, want: 112 * time.Second},
+		{name: "zero", turn: turn{Status: "completed", DurationMs: &zero}, want: 0},
+		{name: "timestamps", turn: turn{Status: "completed", StartedAt: 100, CompletedAt: 212}, want: 112 * time.Second},
+		{name: "local", turn: turn{Status: "completed"}, want: 10 * time.Second},
+		{name: "interrupted", turn: turn{Status: "interrupted"}, want: 10 * time.Second},
+		{name: "failed", turn: turn{Status: "failed"}, want: 10 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &turnProgress{started: now.Add(-10 * time.Second)}

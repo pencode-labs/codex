@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -55,8 +57,48 @@ func fixtureExecutable(t *testing.T) string {
 	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	server, closeServer := fixtureWebSocket(t.Context(), path)
 	t.Cleanup(closeServer)
-	t.Setenv("PENCODE_CODEX_SERVER_URL", "ws"+strings.TrimPrefix(server.URL, "http"))
+	t.Setenv("PENCODE_CODEX_PROXY_URL", "ws"+strings.TrimPrefix(server.URL, "http"))
+	t.Setenv("PENCODE_CODEX_SERVER_URL", "unix://")
 	return path
+}
+
+func fixtureProxy() error {
+	ctx := context.Background()
+	endpoint := os.Getenv("PENCODE_CODEX_PROXY_URL")
+	var conn net.Conn
+	var err error
+	if len(os.Args) == 5 && os.Args[3] == "--sock" {
+		socket, err := filepath.EvalSymlinks(os.Args[4])
+		if err != nil {
+			return err
+		}
+		conn, err = (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		if err != nil {
+			return err
+		}
+	} else if len(os.Args) == 3 && strings.HasPrefix(endpoint, "ws://") {
+		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", strings.TrimPrefix(endpoint, "ws://"))
+		if err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("invalid proxy invocation: %q", os.Args)
+	}
+	defer conn.Close()
+	if logPath := os.Getenv("PENCODE_CODEX_PROXY_LOG"); logPath != "" {
+		log, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		err = json.NewEncoder(log).Encode(os.Getpid())
+		_ = log.Close()
+		if err != nil {
+			return err
+		}
+	}
+	go func() { _, _ = io.Copy(conn, os.Stdin); _ = conn.Close() }()
+	_, err = io.Copy(os.Stdout, conn)
+	return err
 }
 
 func fixtureWebSocket(parent context.Context, path string) (*httptest.Server, func()) {

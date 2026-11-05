@@ -11,6 +11,80 @@ import (
 	"github.com/pencode-labs/pencode/peb"
 )
 
+func TestQuestionReplyMessage(t *testing.T) {
+	const source = `<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"call_123\",0]","question":"已重新拉取飞书，最新仍为修订版 11（与昨天相同），正文仍未明确竞速公式和防守损失。请确定这两项。","answer":"两项都按上述规则实现"}]
+</send_user_message_question_reply>`
+	for _, complete := range []bool{false, true} {
+		for _, content := range []bool{false, true} {
+			item := threadItem{ID: "question-reply", Type: "userMessage", Text: source}
+			if content {
+				item.Text, item.Content = "", []input{{Type: "text", Text: source}}
+			}
+			i := newChatItem(item, complete)
+			i.sentAt = time.Date(2026, 11, 5, 15, 28, 0, 0, time.Local)
+			a := &agent{selected: &conversation{items: []*chatItem{i}}}
+			view := a.composerView()
+			validateBindings(t, view)
+			_, bubble, ok := strings.Cut(view.HTML, `<div class="codex-user-bubble">`)
+			if !ok {
+				t.Fatal("missing user bubble")
+			}
+			bubble, _, ok = strings.Cut(bubble, `</div><div class="codex-message-actions">`)
+			if !ok || !strings.Contains(bubble, `class="codex-question-summary" title="已重新拉取飞书`) || !strings.Contains(bubble, `>两项都按上述规则实现</div>`) {
+				t.Fatal("missing question summary or answer", bubble)
+			}
+			for _, internal := range []string{"send_user_message_question_reply", "questionItemId", "request_user_input_async", "call_123"} {
+				if strings.Contains(bubble, internal) {
+					t.Fatalf("internal payload %q appeared in the bubble", internal)
+				}
+			}
+			if !strings.Contains(view.HTML, `>15:28</span>`) || i.text.String() != source {
+				t.Fatal("rendering changed the timestamp or original message")
+			}
+			cached := i.html
+			if next := a.composerView(); next.HTML != view.HTML || i.html != cached {
+				t.Fatal("repeated rendering changed the cached reply")
+			}
+		}
+	}
+}
+
+func TestQuestionRepliesEscapeTextAndPreserveAnswerWhitespace(t *testing.T) {
+	var b strings.Builder
+	if !renderQuestionReplies(&b, " \n<send_user_message_question_reply>"+`[{"question":"<question> \"one\"","answer":"  <answer>\n**literal**  "},{"question":"第二问","answer":"第二答"}]`+"</send_user_message_question_reply>\n ") {
+		t.Fatal("valid replies were not recognized")
+	}
+	result := b.String()
+	if strings.Count(result, `class="codex-question-reply"`) != 2 || !strings.Contains(result, `title="&lt;question&gt; &#34;one&#34;"`) || !strings.Contains(result, ">  &lt;answer&gt;\n**literal**  </div>") || strings.Index(result, "第二问") > strings.Index(result, "第二答") {
+		t.Fatal("replies lost escaping, whitespace or order", result)
+	}
+}
+
+func TestQuestionReplyInvalidPayloadUsesNormalMessage(t *testing.T) {
+	for _, payload := range []string{`not JSON`, `[]`, `null`, `{}`, `[{"question":"Q"}]`, `[{"question":"Q","answer":"A"},{"answer":"B"}]`} {
+		source := "<send_user_message_question_reply>" + payload + "</send_user_message_question_reply>"
+		var b strings.Builder
+		b.WriteString("prefix")
+		if renderQuestionReplies(&b, source) || b.String() != "prefix" {
+			t.Fatal("invalid payload was partially rendered", source, b.String())
+		}
+		i := newChatItem(threadItem{Type: "userMessage", Text: source}, true)
+		i.render(&b, "", "")
+		if !strings.Contains(b.String(), "&lt;send_user_message_question_reply&gt;") {
+			t.Fatal("unrecognized message was hidden", b.String())
+		}
+	}
+	var b strings.Builder
+	if n := testing.AllocsPerRun(100, func() {
+		if renderQuestionReplies(&b, "ordinary user message") {
+			t.Fatal("ordinary message was treated as a reply")
+		}
+	}); n != 0 {
+		t.Fatalf("ordinary message detection allocated %g", n)
+	}
+}
+
 func messageEditFixture(t *testing.T, responses ...envelope) (*agent, *conversation, *bytes.Buffer) {
 	t.Helper()
 	prior := newChatItem(threadItem{ID: "prior", Type: "userMessage", Text: "prior prompt"}, true)

@@ -16,10 +16,11 @@
 .codex-live-changes { display: flex; justify-content: center; margin-bottom: 8px; }
 .codex-live-changes-anchor { position: relative; display: flex; justify-content: center; width: 100%; }
 .codex-composer .codex-live-changes-pill { display: flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 16px; color: var(--vscode-descriptionForeground); background: var(--vscode-editorWidget-background); font-family: ui; font-size: 13px; white-space: nowrap; }
-.codex-live-changes-popover { visibility: hidden; pointer-events: none; position: absolute; bottom: 100%; left: 50%; z-index: 9; max-width: calc(100% - 16px); padding-bottom: 6px; transform: translateX(-50%); }
+.codex-live-changes-popover { visibility: hidden; pointer-events: none; position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 9; display: flex; justify-content: center; padding-bottom: 6px; }
 .codex-live-changes-anchor:hover .codex-live-changes-popover, .codex-live-changes-anchor:focus-within .codex-live-changes-popover { visibility: visible; pointer-events: auto; }
-.codex-live-changes-list { max-height: 240px; overflow: auto; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 14px; color: var(--vscode-editor-foreground); background: var(--vscode-editorWidget-background); scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
-.codex-live-changes-list > div { display: flex; }
+.codex-live-changes-list { display: flex; flex-direction: column; min-width: 0; max-height: 240px; overflow: auto; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 14px; color: var(--vscode-editor-foreground); background: var(--vscode-editorWidget-background); scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+.codex-live-changes-list > div { display: flex; flex-shrink: 0; }
+.codex-live-changes-list > .codex-change-diff { display: block; }
 .codex-composer .codex-live-change { display: flex; flex: 1; min-width: 0; align-items: center; gap: 12px; padding: 6px 10px; border-radius: 6px; color: var(--vscode-editor-foreground); background: transparent; font: inherit; text-align: left; }
 .codex-composer .codex-live-change:hover { background: var(--vscode-list-hoverBackground); }
 .codex-completion { position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 10; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 12px; background: var(--vscode-editorWidget-background); }
@@ -105,6 +106,8 @@
 .codex-user-bubble { margin: 0; padding: 10px 16px; border-radius: 18px; background: var(--vscode-editorWidget-background); }
 .codex-user-bubble > :first-child { margin-top: 0; }
 .codex-user-bubble > :last-child { margin-bottom: 0; }
+.codex-question-reply + .codex-question-reply { margin-top: 8px; }
+.codex-question-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); }
 .codex-message-actions { position: absolute; bottom: 0; right: 0; display: flex; align-items: center; gap: 6px; height: 28px; color: var(--vscode-descriptionForeground); opacity: 0; pointer-events: none; }
 .codex-user:hover .codex-message-actions, .codex-user:focus-within .codex-message-actions { opacity: 1; pointer-events: auto; }
 .codex-message-time { margin-right: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -141,16 +144,12 @@
 .codex-chat .codex-change-file:hover { background: var(--vscode-list-hoverBackground); }
 .codex-change-path { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .codex-change-diff { padding: 0 12px; }
-.codex-change-diff pre { margin: 0 0 8px; }
+.codex-change-diff pre { margin: 0 0 8px; font-family: monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .codex-diff { color: var(--vscode-editor-foreground); }
 .codex-diff-added { color: var(--vscode-gitDecoration-addedResourceForeground); background: var(--vscode-diffEditor-insertedLineBackground); }
 .codex-diff-removed { color: var(--vscode-gitDecoration-deletedResourceForeground); background: var(--vscode-diffEditor-removedLineBackground); }
 .codex-diff-header { color: var(--vscode-descriptionForeground); }
 .codex-diff-hunk { color: var(--vscode-textLink-foreground); }
-.codex-diff-preview { box-sizing: border-box; width: 100%; height: 100%; min-width: 0; padding: 16px 24px; overflow: auto; color: var(--vscode-editor-foreground); font-family: ui; font-size: 13px; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
-.codex-diff-preview header { display: flex; align-items: center; gap: 12px; }
-.codex-diff-preview h2 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
-.codex-diff-preview pre { margin: 12px 0; font-family: monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .codex-chat .codex-changes-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 12px; border-radius: 0; color: var(--vscode-descriptionForeground); background: transparent; text-align: left; }
 .codex-changes-toggle img { width: 12px; height: 12px; }
 .codex-changes-toggle[aria-expanded="true"] img { transform: rotate(180deg); }
@@ -178,11 +177,12 @@
 .codex-chat table { border-collapse: collapse; width: 100%; }
 .codex-chat td, .codex-chat th { border: 1px solid var(--vscode-editorGroup-border); padding: 6px 10px; }
 .codex-chat a { color: var(--vscode-textLink-foreground); }
-.codex-chat button.codex-link, .codex-directory button.codex-link { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; color: var(--vscode-textLink-foreground); background: transparent; font-family: inherit; font-size: inherit; line-height: inherit; text-align: left; cursor: pointer; text-decoration: none; overflow-wrap: anywhere; }
-.codex-chat button.codex-link { margin: 0 .25em; }
-.codex-chat button.codex-link:hover, .codex-directory button.codex-link:hover { background: transparent; text-decoration: underline; }
+.codex-chat a.codex-link, .codex-directory button.codex-link { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; color: var(--vscode-textLink-foreground); background: transparent; font-family: inherit; font-size: inherit; line-height: inherit; text-align: left; cursor: pointer; text-decoration: none; overflow-wrap: anywhere; }
+.codex-chat a.codex-link { display: inline; margin: 0 .25em; }
+.codex-chat a.codex-link:hover, .codex-directory button.codex-link:hover { background: transparent; text-decoration: underline; }
 .codex-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; border-radius: 2px; }
 .codex-link-icon { display: block; align-self: center; flex-shrink: 0; width: 14px; height: 14px; }
+.codex-chat .codex-link-icon { display: inline; margin-right: 4px; vertical-align: middle; }
 .codex-chat .codex-link code { padding: 0; background: transparent; color: inherit; }
 .codex-directory { padding: 16px 24px; color: var(--vscode-editor-foreground); font-family: ui; font-size: 14px; }
 .codex-directory h2 { margin: 0 0 8px; font-size: 18px; }

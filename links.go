@@ -20,8 +20,8 @@ var chatLinkContext = renderer.NewContextKey()
 
 type chatLinkState struct {
 	root, scope string
-	index       int
 	bindings    []peb.EditorBinding
+	index       int
 }
 
 func chatLinkDecorator(markdownhtml.NodeRenderer) markdownhtml.NodeRenderer {
@@ -32,7 +32,7 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 	w := writer.(util.BufWriter)
 	if !entering {
 		if node.Kind() == ast.KindLink {
-			_, _ = w.WriteString(`</button>`)
+			_, _ = w.WriteString(`</a>`)
 		}
 		return ast.WalkContinue, nil
 	}
@@ -46,7 +46,7 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 	links := context.Get(chatLinkContext).(*chatLinkState)
 	href, icon, directory := chatLinkTarget(destination, links.root)
 	var ref string
-	_, _ = w.WriteString(`<button type="button" role="link"`)
+	_, _ = w.WriteString(`<a role="link"`)
 	if href != "" {
 		ref = "link/" + links.scope + "/" + strconv.Itoa(links.index)
 		links.index++
@@ -54,7 +54,7 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 			ref = "directory/" + url.PathEscape(directory) + "/" + ref
 			links.bindings = append(links.bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 		}
-		_, _ = w.WriteString(` class="codex-link" data-ref="` + html.EscapeString(ref) + `" data-pencode-href="` + html.EscapeString(href) + `" title="`)
+		_, _ = w.WriteString(` class="codex-link" data-ref="` + html.EscapeString(ref) + `" href="` + html.EscapeString(href) + `" title="`)
 		if title == "" {
 			title = destination
 		}
@@ -66,7 +66,7 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 	}
 	if n, ok := node.(*ast.AutoLink); ok {
 		_, _ = n.Label.WriteTo(markdownhtml.ContextTextWriter(context), source)
-		_, _ = w.WriteString(`</button>`)
+		_, _ = w.WriteString(`</a>`)
 	}
 	return ast.WalkContinue, nil
 }
@@ -145,7 +145,7 @@ func (a *agent) openDirectoryLink(encoded string, context peb.ActionContext) err
 	if err != nil {
 		return err
 	}
-	ui := peb.UI{ID: "directory/" + name, Title: filepath.Base(name), Kind: peb.EditorTab, Context: context, View: directoryView(name)}
+	ui := peb.UI{ID: previewID("directory", name), Title: filepath.Base(name), Kind: peb.EditorTab, Context: context, View: directoryView(name)}
 	if err := a.publisher.Show(ui); err != nil {
 		return err
 	}

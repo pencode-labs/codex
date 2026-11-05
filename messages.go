@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"slices"
@@ -11,6 +12,40 @@ import (
 
 	"github.com/pencode-labs/pencode/peb"
 )
+
+// Called only when building a user message's cached HTML.
+func renderQuestionReplies(b *strings.Builder, text string) bool {
+	payload, ok := strings.CutPrefix(strings.TrimSpace(text), "<send_user_message_question_reply>")
+	if !ok {
+		return false
+	}
+	payload, ok = strings.CutSuffix(payload, "</send_user_message_question_reply>")
+	if !ok {
+		return false
+	}
+	var replies []struct {
+		Question string `json:"question"`
+		Answer   string `json:"answer"`
+	}
+	if json.Unmarshal([]byte(payload), &replies) != nil || len(replies) == 0 {
+		return false
+	}
+	for _, reply := range replies {
+		if reply.Question == "" || reply.Answer == "" {
+			return false
+		}
+	}
+	for _, reply := range replies {
+		b.WriteString(`<div class="codex-question-reply"><div class="codex-question-summary" title="`)
+		b.WriteString(html.EscapeString(reply.Question))
+		b.WriteString(`">`)
+		b.WriteString(html.EscapeString(reply.Question))
+		b.WriteString(`</div><div class="codex-text" data-pencode-preserve-whitespace>`)
+		b.WriteString(html.EscapeString(reply.Answer))
+		b.WriteString(`</div></div>`)
+	}
+	return true
+}
 
 func (i *chatItem) setSentAt(started int64) {
 	if i.data.Type != "userMessage" || !i.sentAt.IsZero() {
@@ -109,10 +144,10 @@ func (a *agent) editedInputs(c *conversation, turnID, itemID string) ([]input, e
 	var cursor string
 	for {
 		page, err := call[struct {
-			Data []struct {
+			NextCursor string `json:"nextCursor"`
+			Data       []struct {
 				Item threadItem `json:"item"`
 			} `json:"data"`
-			NextCursor string `json:"nextCursor"`
 		}](a.client, "thread/items/list", struct {
 			ThreadID string `json:"threadId"`
 			TurnID   string `json:"turnId"`

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -20,6 +22,15 @@ import (
 
 //go:embed resources/chat.css
 var chatCSS string
+
+// Preview IDs must fit the host's 128-byte action ID alphabet, even when
+// their keys contain paths or escaped thread/turn IDs.
+func previewID(kind, key string) string {
+	sum := sha256.Sum256([]byte(key))
+	var encoded [sha256.Size * 2]byte
+	hex.Encode(encoded[:], sum[:])
+	return kind + "-" + string(encoded[:])
+}
 
 var chatParser = parser.New(parser.WithExtensions(extension.TableParser, extension.NewLinkifyParser()))
 var chatRenderer = markdownhtml.New(markdownhtml.WithHardWraps(), markdownhtml.WithExtensions(extension.TableHTMLRenderer), markdownhtml.WithNodeRendererDecorators(map[ast.NodeKind]markdownhtml.NodeRendererDecorator{
@@ -514,7 +525,7 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 			i.renderActivityLabel(b, label)
 		}
 		b.WriteString(`</span>`)
-		renderActivityStatus(b, i.activityStatus())
+		renderActivityStatus(b, i.data.Status)
 		if i.detailRef != "" {
 			b.WriteString(`<img class="codex-activity-chevron" src="resources/icons/chevron-down.svg" alt=""></button>`)
 		} else {
@@ -526,7 +537,7 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 		}
 		b.WriteString(`<div class="codex-activity-details">`)
 	}
-	if i.text.Len() > 0 {
+	if i.text.Len() > 0 && (i.data.Type != "userMessage" || !renderQuestionReplies(b, i.text.String())) {
 		if i.complete && (i.data.Type == "userMessage" || i.data.Type == "agentMessage" || i.data.Type == "plan") {
 			i.linkBindings = renderMarkdown(b, i.text.String(), root, scope)
 		} else {
@@ -603,11 +614,11 @@ func (r *approval) render(b *strings.Builder, bindings []peb.EditorBinding) []pe
 			Questions []struct {
 				ID       string `json:"id"`
 				Question string `json:"question"`
-				IsSecret bool   `json:"isSecret"`
 				Options  []struct {
 					Label       string `json:"label"`
 					Description string `json:"description"`
 				} `json:"options"`
+				IsSecret bool `json:"isSecret"`
 			} `json:"questions"`
 		}
 		if json.Unmarshal(r.params, &params) == nil {

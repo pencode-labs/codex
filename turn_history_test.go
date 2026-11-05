@@ -117,13 +117,13 @@ func TestTurnHistoryRestoresAndRetainsExpansion(t *testing.T) {
 
 func TestCompletedTurnDurationFormat(t *testing.T) {
 	for _, tc := range []struct {
-		elapsed time.Duration
 		want    string
+		elapsed time.Duration
 	}{
-		{0, "用时 0s"},
-		{59 * time.Second, "用时 59s"},
-		{time.Minute, "用时 1m 0s"},
-		{time.Hour + 2*time.Minute + 3*time.Second, "用时 1h 2m 3s"},
+		{elapsed: 0, want: "用时 0s"},
+		{elapsed: 59 * time.Second, want: "用时 59s"},
+		{elapsed: time.Minute, want: "用时 1m 0s"},
+		{elapsed: time.Hour + 2*time.Minute + 3*time.Second, want: "用时 1h 2m 3s"},
 	} {
 		var b strings.Builder
 		p := turnProgress{complete: true, elapsed: tc.elapsed}

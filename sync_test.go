@@ -27,6 +27,39 @@ func (p syncPublisher) Show(ui peb.UI) error {
 }
 func (p syncPublisher) CloseUI(id string) error { return nil }
 
+func TestTranscriptClicksRemainResponsiveDuringObserverRPC(t *testing.T) {
+	var output bytes.Buffer
+	var published capturedUI
+	i := newChatItem(threadItem{ID: "command", Type: "commandExecution", Command: "go test", Status: "inProgress", AggregatedOutput: "live output"}, false)
+	c := &conversation{thread: thread{ID: "external"}, observing: true, busy: true, items: []*chatItem{i}}
+	a := &agent{publisher: &published, selected: c, workspaceOpen: true, workspaceDirty: true, commands: make(chan command, 1)}
+	a.flush()
+	client := &rpcClient{ctx: t.Context(), writer: json.NewEncoder(&output), messages: make(chan envelope, 1), commands: a.commands}
+	client.dispatch = func(cmd command) {
+		a.handlePendingCommand(cmd)
+		if a.pendingCount != 0 || published.ui.View == nil || !strings.Contains(published.ui.View.HTML, `data-ref="item/command"`) {
+			t.Error("activity click waited for the observer response")
+		}
+		if cmd.event.Event.Ref == "item/command" && !strings.Contains(published.ui.View.HTML, "live output") {
+			t.Error("command expansion waited for the observer response")
+		}
+		// The view must already be published before the server responds.
+		client.messages <- envelope{ID: json.RawMessage(fmt.Sprint(client.next)), Result: json.RawMessage(`{}`)}
+	}
+	for _, ref := range []string{"activity/command", "item/command"} {
+		a.commands <- command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "click", Ref: ref}}}
+		if _, err := call[json.RawMessage](client, "thread/turns/list", struct{}{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !i.groupExpanded || !i.expanded {
+		t.Fatal("running transcript did not expand")
+	}
+	if strings.Count(output.String(), `"method"`) != 2 {
+		t.Fatal("transcript clicks started a nested RPC", output.String())
+	}
+}
+
 func TestExternalObserverAutomaticallyPollsWhileHidden(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

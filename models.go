@@ -11,10 +11,10 @@ import (
 type modelOption struct {
 	Model                     string                  `json:"model"`
 	DisplayName               string                  `json:"displayName"`
-	Hidden                    bool                    `json:"hidden"`
-	IsDefault                 bool                    `json:"isDefault"`
 	DefaultReasoningEffort    string                  `json:"defaultReasoningEffort"`
 	SupportedReasoningEfforts []reasoningEffortOption `json:"supportedReasoningEfforts"`
+	Hidden                    bool                    `json:"hidden"`
+	IsDefault                 bool                    `json:"isDefault"`
 }
 
 type reasoningEffortOption struct {
@@ -93,8 +93,8 @@ func (a *agent) loadModels() error {
 	cursor := ""
 	for {
 		page, err := call[struct {
-			Data       []modelOption `json:"data"`
 			NextCursor string        `json:"nextCursor"`
+			Data       []modelOption `json:"data"`
 		}](a.client, "model/list", struct {
 			Cursor        string `json:"cursor,omitempty"`
 			Limit         int    `json:"limit"`

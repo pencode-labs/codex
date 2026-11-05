@@ -8,6 +8,14 @@ import (
 	"github.com/pencode-labs/pencode/peb"
 )
 
+func validateSurfaceID(t *testing.T, id string) {
+	t.Helper()
+	// Surface IDs follow the host's action ID contract, unlike DOM refs.
+	if id == "" || id == "." || id == ".." || len(id) > 128 || strings.Trim(id, "abcdefghijklmnopqrstuvwxyz0123456789.-") != "" {
+		t.Fatalf("surface ID violates the host protocol: %q", id)
+	}
+}
+
 func TestChatStatusFollowsCurrentTurnProgress(t *testing.T) {
 	for _, scenario := range []string{"waiting", "reply", "activity", "no-user-item", "reply-without-user"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -76,13 +84,13 @@ func TestActivityDetailsSurviveUpdates(t *testing.T) {
 	i.replace(item, true)
 	view = a.composerView()
 	validateBindings(t, view)
-	if !strings.Contains(view.HTML, `aria-expanded="true"`) || !strings.Contains(view.HTML, "&lt;script&gt;failed&lt;/script&gt;") || !strings.Contains(view.HTML, "失败") || strings.Contains(view.HTML, "<script>") {
+	if !strings.Contains(view.HTML, `aria-expanded="true"`) || !strings.Contains(view.HTML, "&lt;script&gt;failed&lt;/script&gt;") || strings.Contains(view.HTML, "失败") || strings.Contains(view.HTML, "<script>") {
 		t.Fatal("completion lost expanded details or escaping", view.HTML)
 	}
 	toggle()
 	view = a.composerView()
-	if strings.Contains(view.HTML, "<pre>") || !strings.Contains(view.HTML, "失败") {
-		t.Fatal("failure must remain visible with details collapsed", view.HTML)
+	if strings.Contains(view.HTML, "<pre>") || strings.Contains(view.HTML, "失败") {
+		t.Fatal("collapsed details must not show a failure badge", view.HTML)
 	}
 }
 

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"html"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,12 +30,12 @@ func TestChatLinksRenderTargetsAndIcons(t *testing.T) {
 	bindings := renderMarkdown(&b, "[目录](docs) [说明](guide%20notes.md) [`index.html`](index.html:12) [网站](https://example.com?q=1&x=2) https://example.org\n\n[危险](javascript:alert%281%29) ![隐藏](https://example.com/secret)", root, "message")
 	view := &peb.EditorView{HTML: b.String(), Events: bindings}
 	validateBindings(t, view)
-	for _, want := range []string{`data-pencode-icon="folder"`, `data-pencode-icon="file-text"`, `data-pencode-icon="code"`, `data-pencode-icon="globe"`, `data-pencode-href="./index.html:12"`, `data-pencode-href="https://example.com?q=1&amp;x=2"`, `data-pencode-href="https://example.org"`, `role="link"`, `<code>index.html</code>`} {
+	for _, want := range []string{`data-pencode-icon="folder"`, `data-pencode-icon="file-text"`, `data-pencode-icon="code"`, `data-pencode-icon="globe"`, `href="./index.html:12"`, `href="https://example.com?q=1&amp;x=2"`, `href="https://example.org"`, `<a role="link"`, `<code>index.html</code>`} {
 		if !strings.Contains(view.HTML, want) {
 			t.Fatalf("missing %s in %s", want, view.HTML)
 		}
 	}
-	if len(bindings) != 1 || !strings.HasPrefix(bindings[0].Ref, "directory/") || strings.Contains(view.HTML, `data-pencode-href="javascript:`) || strings.Contains(view.HTML, "secret") {
+	if len(bindings) != 1 || !strings.HasPrefix(bindings[0].Ref, "directory/") || strings.Contains(view.HTML, `href="javascript:`) || strings.Contains(view.HTML, "secret") {
 		t.Fatal("incorrect navigation bindings or unsafe resource", view)
 	}
 }
@@ -57,7 +59,7 @@ func TestUserMessagesRenderClickableLinks(t *testing.T) {
 	a := &agent{selected: &conversation{items: []*chatItem{item}}}
 	view := a.composerView()
 	validateBindings(t, view)
-	if !strings.Contains(view.HTML, `data-pencode-href="extensions/codex/"`) || !strings.Contains(view.HTML, `data-pencode-href="https://example.com"`) {
+	if !strings.Contains(view.HTML, `href="extensions/codex/"`) || !strings.Contains(view.HTML, `href="https://example.com"`) {
 		t.Fatal("user message links are not interactive", view.HTML)
 	}
 }
@@ -78,5 +80,41 @@ func TestDirectoryLinksBrowseEscapedEntries(t *testing.T) {
 	view = directoryView(filepath.Join(root, "missing"))
 	if !strings.Contains(view.HTML, `role="alert"`) {
 		t.Fatal("directory errors must be visible", view)
+	}
+}
+
+func TestDirectoryPreviewTabsKeepNavigating(t *testing.T) {
+	root := filepath.Join(t.TempDir(), strings.Repeat("目录 & ", 20))
+	child := filepath.Join(root, "child")
+	if err := os.MkdirAll(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	updates := make(chan peb.UI, 2)
+	a := &agent{publisher: syncPublisher{updates: updates}}
+	context := peb.ActionContext{ID: "chat", ProjectPath: root}
+	open := func(surface, name string) peb.UI {
+		t.Helper()
+		if err := a.handleCommand(command{event: peb.UIEvent{ID: surface, Context: context,
+			Event: peb.EditorEvent{Kind: "click", Ref: "directory/" + url.PathEscape(name) + "/link"}}}); err != nil {
+			t.Fatal(err)
+		}
+		if len(updates) != 2 {
+			t.Fatalf("directory click must publish content and reveal its tab: got %d updates", len(updates))
+		}
+		ui, reveal := <-updates, <-updates
+		validateSurfaceID(t, ui.ID)
+		if ui.Kind != peb.EditorTab || ui.View == nil || ui.Context != context || reveal.ID != ui.ID || reveal.View != nil {
+			t.Fatal("directory click did not open and reveal a preview", ui, reveal)
+		}
+		validateBindings(t, ui.View)
+		return ui
+	}
+	first := open("composer", root)
+	second := open(first.ID, child)
+	if first.ID == second.ID || !strings.Contains(second.View.HTML, html.EscapeString(child)) {
+		t.Fatal("child directory must open a separate preview", second)
+	}
+	if reopened := open(second.ID, root); reopened.ID != first.ID {
+		t.Fatal("returning to a directory must reuse its tab")
 	}
 }

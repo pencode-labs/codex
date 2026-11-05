@@ -2,7 +2,6 @@ package main
 
 import (
 	"html"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,8 +11,8 @@ import (
 
 type changedFile struct {
 	path           string
-	added, removed int
 	diffs          []fileDiff
+	added, removed int
 	expanded       bool
 }
 
@@ -23,14 +22,14 @@ type fileDiff struct {
 
 type turnFiles struct {
 	id, root, ref  string
+	html           string
+	liveHTML       string
 	files          []changedFile
+	liveBindings   []peb.EditorBinding
+	bindings       []peb.EditorBinding
 	added, removed int
 	complete       bool
 	collapsed      bool
-	html           string
-	liveHTML       string
-	liveBindings   []peb.EditorBinding
-	bindings       []peb.EditorBinding
 }
 
 func newTurnFiles(id, root string) *turnFiles {
@@ -119,10 +118,13 @@ func (f *turnFiles) prepareLive() {
 	b.WriteString(` 个文件已更改`)
 	renderChangeCounts(&b, f.added, f.removed)
 	b.WriteString(`</button><div class="codex-live-changes-popover"><div id="pencode-extension-codex-live-changes-list" class="codex-live-changes-list" role="list" aria-label="本轮已更改的文件">`)
+	diffBudget := 32 << 10
 	for index, file := range f.files {
 		ref := "change-file/" + f.id + "/" + strconv.Itoa(index)
 		b.WriteString(`<div role="listitem"><button type="button" class="codex-live-change" data-ref="`)
 		b.WriteString(html.EscapeString(ref))
+		b.WriteString(`" aria-expanded="`)
+		b.WriteString(strconv.FormatBool(file.expanded))
 		b.WriteString(`"><span class="codex-change-path" title="`)
 		b.WriteString(html.EscapeString(file.path))
 		b.WriteString(`">`)
@@ -130,6 +132,9 @@ func (f *turnFiles) prepareLive() {
 		b.WriteString(`</span>`)
 		renderChangeCounts(&b, file.added, file.removed)
 		b.WriteString(`</button></div>`)
+		if file.expanded {
+			renderFileDiffs(&b, file, &diffBudget)
+		}
 		f.liveBindings = append(f.liveBindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 	}
 	b.WriteString(`</div></div></div></div>`)
@@ -187,7 +192,9 @@ func (f *turnFiles) prepare() {
 		ref := "change-file/" + f.id + "/" + strconv.Itoa(index)
 		b.WriteString(`<button class="codex-change-file" type="button" data-ref="`)
 		b.WriteString(html.EscapeString(ref))
-		expanded := file.expanded && !f.collapsed
+		expanded := file.expanded
+		b.WriteString(`" aria-expanded="`)
+		b.WriteString(strconv.FormatBool(expanded))
 		b.WriteString(`" title="`)
 		b.WriteString(html.EscapeString(file.path))
 		b.WriteString(`"><span class="codex-change-path">`)
@@ -197,23 +204,7 @@ func (f *turnFiles) prepare() {
 		b.WriteString(`</button>`)
 		f.bindings = append(f.bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 		if expanded {
-			b.WriteString(`<div class="codex-change-diff">`)
-			for _, diff := range file.diffs {
-				if diffBudget == 0 {
-					break
-				}
-				text := diff.text[:min(len(diff.text), min(diffBudget, 16<<10))]
-				text = strings.ToValidUTF8(text, "")
-				renderDiff(&b, text, diff.kind)
-				diffBudget -= len(text)
-				if len(text) < len(diff.text) {
-					b.WriteString(`<p class="codex-muted">部分 diff 已省略，完整记录保存在 Codex 会话中。</p>`)
-				}
-			}
-			if diffBudget == 0 {
-				b.WriteString(`<p class="codex-muted">已达到 diff 显示上限，完整记录保存在 Codex 会话中。</p>`)
-			}
-			b.WriteString(`</div>`)
+			renderFileDiffs(&b, file, &diffBudget)
 		}
 	}
 	b.WriteString(`</div>`)
@@ -230,6 +221,26 @@ func (f *turnFiles) prepare() {
 	b.WriteString(`<img class="codex-activity-chevron" src="resources/icons/chevron-down.svg" alt=""></button></section>`)
 	f.bindings = append(f.bindings, peb.EditorBinding{Ref: f.ref, Kind: "click"})
 	f.html = b.String()
+}
+
+func renderFileDiffs(b *strings.Builder, file changedFile, budget *int) {
+	b.WriteString(`<div class="codex-change-diff">`)
+	for _, diff := range file.diffs {
+		if *budget == 0 {
+			break
+		}
+		text := diff.text[:min(len(diff.text), min(*budget, 16<<10))]
+		text = strings.ToValidUTF8(text, "")
+		renderDiff(b, text, diff.kind)
+		*budget -= len(text)
+		if len(text) < len(diff.text) {
+			b.WriteString(`<p class="codex-muted">部分 diff 已省略，完整记录保存在 Codex 会话中。</p>`)
+		}
+	}
+	if *budget == 0 {
+		b.WriteString(`<p class="codex-muted">已达到 diff 显示上限，完整记录保存在 Codex 会话中。</p>`)
+	}
+	b.WriteString(`</div>`)
 }
 
 func renderDiff(b *strings.Builder, text, kind string) {
@@ -322,16 +333,39 @@ func (c *conversation) turnFiles(id string) *turnFiles {
 
 func (c *conversation) handleChangesClick(ref string) bool {
 	kind, rest, ok := strings.Cut(ref, "/")
-	if !ok || kind != "changes" && kind != "changes-diff" {
+	if !ok || kind != "changes" && kind != "changes-diff" && kind != "change-file" {
 		return false
 	}
+	index := -1
+	if kind == "change-file" {
+		separator := strings.LastIndexByte(rest, '/')
+		if separator < 0 {
+			return true
+		}
+		var err error
+		index, err = strconv.Atoi(rest[separator+1:])
+		if err != nil || index < 0 {
+			return true
+		}
+		rest = rest[:separator]
+	}
 	f := c.turnFiles(rest)
-	if f == nil || !f.complete || len(f.files) == 0 {
+	if f == nil || len(f.files) == 0 || kind != "change-file" && !f.complete {
 		return true
 	}
 	switch kind {
+	case "change-file":
+		if index >= len(f.files) {
+			return true
+		}
+		f.files[index].expanded = !f.files[index].expanded
 	case "changes":
 		f.collapsed = !f.collapsed
+		if f.collapsed {
+			for index := range f.files {
+				f.files[index].expanded = false
+			}
+		}
 	case "changes-diff":
 		expand := !f.allExpanded()
 		f.collapsed = false
@@ -339,52 +373,7 @@ func (c *conversation) handleChangesClick(ref string) bool {
 			f.files[index].expanded = expand
 		}
 	}
-	f.html = ""
+	f.html, f.liveHTML = "", ""
 	c.dirty = true
 	return true
-}
-
-func (a *agent) openChangePreview(ref string) error {
-	separator := strings.LastIndexByte(ref, '/')
-	if separator < 0 || a.selected == nil {
-		return nil
-	}
-	f := a.selected.turnFiles(ref[:separator])
-	n, err := strconv.Atoi(ref[separator+1:])
-	if f == nil || err != nil || n < 0 || n >= len(f.files) {
-		return nil
-	}
-	file := &f.files[n]
-	var b strings.Builder
-	b.WriteString(`<main class="codex-diff-preview" data-pencode-layout="fill" data-ref="diff-preview" data-pencode-selectable data-pencode-scroll="preserve"><header><h2>`)
-	b.WriteString(html.EscapeString(filepath.Base(file.path)))
-	b.WriteString(`</h2>`)
-	renderChangeCounts(&b, file.added, file.removed)
-	b.WriteString(`</header><p class="codex-muted">`)
-	b.WriteString(html.EscapeString(file.path))
-	b.WriteString(`</p>`)
-	budget := 128 << 10
-	for _, diff := range file.diffs {
-		if budget == 0 || b.Len() > 224<<10 {
-			b.WriteString(`<p class="codex-muted">已达到 diff 显示上限，完整记录保存在 Codex 会话中。</p>`)
-			break
-		}
-		text := strings.ToValidUTF8(diff.text[:min(len(diff.text), budget)], "")
-		renderDiff(&b, text, diff.kind)
-		budget -= len(text)
-		if len(text) < len(diff.text) {
-			b.WriteString(`<p class="codex-muted">部分 diff 已省略，完整记录保存在 Codex 会话中。</p>`)
-		}
-	}
-	b.WriteString(`</main>`)
-	ui := peb.UI{
-		ID:    "diff/" + url.PathEscape(a.selected.ID) + "/" + url.PathEscape(f.id) + "/" + strconv.Itoa(n),
-		Title: filepath.Base(file.path) + " · 差异", Kind: peb.EditorTab, Context: a.selected.context,
-		View: &peb.EditorView{HTML: b.String(), CSS: chatCSS},
-	}
-	if err := a.publisher.Show(ui); err != nil {
-		return err
-	}
-	ui.View = nil
-	return a.publisher.Show(ui)
 }

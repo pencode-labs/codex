@@ -6,15 +6,15 @@ import (
 )
 
 type skillOption struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Path        string `json:"path"`
-	Enabled     bool   `json:"enabled"`
-	Interface   struct {
+	Interface struct {
 		DisplayName      string `json:"displayName"`
 		ShortDescription string `json:"shortDescription"`
 	} `json:"interface"`
+	Name                      string `json:"name"`
+	Description               string `json:"description"`
+	Path                      string `json:"path"`
 	detail, search, reference string
+	Enabled                   bool `json:"enabled"`
 }
 
 func (s *skillOption) prepare() {

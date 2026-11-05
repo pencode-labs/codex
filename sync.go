@@ -10,8 +10,8 @@ import (
 const externalSessionStatus = "正在自动同步其他 Codex 客户端已保存的记录。停止任务请在原客户端操作。"
 
 type turnPage struct {
-	Data       []turn `json:"data"`
 	NextCursor string `json:"nextCursor"`
+	Data       []turn `json:"data"`
 }
 
 func (a *agent) openConversation(id string) error {
@@ -85,11 +85,11 @@ func (a *agent) syncObserved() {
 func (a *agent) observedPage(id, cursor string) (json.RawMessage, error) {
 	return call[json.RawMessage](a.client, "thread/turns/list", struct {
 		ThreadID      string `json:"threadId"`
-		Limit         int    `json:"limit"`
 		SortDirection string `json:"sortDirection"`
 		ItemsView     string `json:"itemsView"`
 		Cursor        string `json:"cursor,omitempty"`
-	}{id, 10, "desc", "full", cursor})
+		Limit         int    `json:"limit"`
+	}{ThreadID: id, Limit: 10, SortDirection: "desc", ItemsView: "full", Cursor: cursor})
 }
 
 func (a *agent) syncConversation(c *conversation) error {

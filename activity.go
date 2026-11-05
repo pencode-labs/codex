@@ -22,18 +22,18 @@ const (
 )
 
 type activityInfo struct {
-	kind        activityKind
 	label, icon string
+	kind        activityKind
 }
 
 var activityKinds = [...]activityInfo{
-	{activityEdit, "编辑了文件", "pencil"},
-	{activityRead, "读取了文件", "book-open"},
-	{activityList, "列出了文件", "folder"},
-	{activitySearch, "进行了搜索", "search"},
-	{activityCommand, "运行了命令", "terminal"},
-	{activityTool, "调用了工具", "wrench"},
-	{activityReasoning, "思考", "wrench"},
+	{kind: activityEdit, label: "编辑了文件", icon: "pencil"},
+	{kind: activityRead, label: "读取了文件", icon: "book-open"},
+	{kind: activityList, label: "列出了文件", icon: "folder"},
+	{kind: activitySearch, label: "进行了搜索", icon: "search"},
+	{kind: activityCommand, label: "运行了命令", icon: "terminal"},
+	{kind: activityTool, label: "调用了工具", icon: "wrench"},
+	{kind: activityReasoning, label: "思考", icon: "wrench"},
 }
 
 func (k activityKind) primary() (result activityInfo) {
@@ -81,43 +81,16 @@ func (i *chatItem) activityKinds() activityKind {
 	return 0
 }
 
-func (i *chatItem) activityStatus() string {
-	data := &i.data
-	if data.Type != "commandExecution" || data.Status != "failed" || data.ExitCode == nil || *data.ExitCode != 1 || i.output.Len() != 0 || len(data.CommandActions) != 1 {
-		return data.Status
-	}
-	action := &data.CommandActions[0]
-	if action.Type != "search" && action.Type != "listFiles" {
-		return data.Status
-	}
-	// rg reports no matches with exit code 1. Only treat a standalone query
-	// with no diagnostics as an empty result; compound commands may fail elsewhere.
-	command := strings.TrimSpace(action.Command)
-	if strings.ContainsAny(command, "|;&\n\r`$<>") {
-		return data.Status
-	}
-	if end := strings.IndexAny(command, " \t"); end >= 0 {
-		command = command[:end]
-	}
-	if filepath.Base(command) == "rg" {
-		return "completed"
-	}
-	return data.Status
-}
-
 func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, sweep bool) []peb.EditorBinding {
 	first := items[0]
 	if first.groupRef == "" {
 		first.groupRef = "activity/" + first.data.ID
 	}
 	var kinds activityKind
-	running, failed, declined := false, false, false
+	running, declined := false, false
 	for _, i := range items {
 		kinds |= i.activityKinds()
-		// Keep failures visible even when the group is collapsed or still running.
-		switch i.activityStatus() {
-		case "failed":
-			failed = true
+		switch i.data.Status {
 		case "declined":
 			declined = true
 		case "inProgress":
@@ -157,9 +130,6 @@ func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items
 	if running {
 		renderActivityStatus(b, "inProgress")
 	}
-	if failed {
-		renderActivityStatus(b, "failed")
-	}
 	if declined {
 		renderActivityStatus(b, "declined")
 	}
@@ -195,17 +165,15 @@ func renderActivityTitle(b *strings.Builder, kinds activityKind) {
 func renderActivityStatus(b *strings.Builder, status string) {
 	label := status
 	switch status {
-	case "", "completed":
+	case "", "completed", "failed":
 		return
 	case "inProgress":
 		label = "进行中"
-	case "failed":
-		label = "失败"
 	case "declined":
 		label = "已拒绝"
 	}
 	b.WriteString(`<span class="codex-activity-status`)
-	if status == "failed" || status == "declined" {
+	if status == "declined" {
 		b.WriteString(` codex-status`)
 	}
 	b.WriteString(`">`)

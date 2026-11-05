@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,12 +10,24 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
 
 func TestSharedEndpointSelectionAndAuthentication(t *testing.T) {
+	for _, proxy := range []bool{false, true} {
+		name := "websocket"
+		if proxy {
+			name = "proxy"
+		}
+		t.Run(name, func(t *testing.T) { testSharedEndpointSelectionAndAuthentication(t, proxy) })
+	}
+}
+
+func testSharedEndpointSelectionAndAuthentication(t *testing.T, proxy bool) {
 	const token = "local-test-token"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+token {
@@ -42,8 +55,13 @@ func TestSharedEndpointSelectionAndAuthentication(t *testing.T) {
 	defer server.Close()
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
 	t.Setenv("PENCODE_CODEX_SERVER_TOKEN", token)
-	// An existing directory without a CLI must not block an explicit endpoint.
-	missingCLI := t.TempDir()
+	// Direct WebSocket addresses work without a CLI; Unix endpoints own a proxy.
+	path := t.TempDir()
+	if proxy {
+		path = fixtureExecutable(t)
+		t.Setenv("PENCODE_CODEX_PROXY_URL", endpoint)
+		endpoint = "unix://"
+	}
 	for _, setting := range []bool{true, false} {
 		name, configured, environment := "environment", "", "  "+endpoint+"  "
 		if setting {
@@ -51,7 +69,7 @@ func TestSharedEndpointSelectionAndAuthentication(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("PENCODE_CODEX_SERVER_URL", environment)
-			client, err := startClient(t.Context(), t.TempDir(), missingCLI, configured, nil)
+			client, err := startClient(t.Context(), t.TempDir(), path, configured, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,14 +143,16 @@ func linkDefaultSocket(t *testing.T, socket string) {
 	}
 }
 
-func TestDiscoverDefaultSocketWithoutExecutable(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
+func TestProxyReusesDefaultSocket(t *testing.T) {
+	path := fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_SERVER_URL", "")
 	linkDefaultSocket(t, unixRPCServer(t, false))
-	// A directory with no executable would fail path resolution or startup.
-	missingCLI := t.TempDir()
 	for _, endpoint := range []string{"", "unix://", ""} {
-		client, err := startClient(t.Context(), t.TempDir(), missingCLI, endpoint, nil)
+		if endpoint == "unix://" {
+			// Explicit Unix endpoints use proxy --sock to select the server.
+			endpoint, _ = defaultServerURL("")
+		}
+		client, err := startClient(t.Context(), t.TempDir(), path, endpoint, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,11 +164,104 @@ func TestDiscoverDefaultSocketWithoutExecutable(t *testing.T) {
 	}
 }
 
+func TestProxyProcessesAreOwnedAndReaped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process liveness probe requires Unix signals")
+	}
+	path := fixtureExecutable(t)
+	logPath := filepath.Join(t.TempDir(), "proxies")
+	t.Setenv("PENCODE_CODEX_PROXY_LOG", logPath)
+	clients := make([]*rpcClient, 2)
+	for i := range clients {
+		client, err := startClient(t.Context(), t.TempDir(), path, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(client.close)
+		clients[i] = client
+		if _, err := call[json.RawMessage](client, "initialize", struct{}{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log, err := os.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	decoder := json.NewDecoder(log)
+	var pids [2]int
+	for i := range pids {
+		if err := decoder.Decode(&pids[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pids[0] == pids[1] {
+		t.Fatal("clients shared a proxy process")
+	}
+	for i, pid := range pids {
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer process.Release()
+		if i == 1 {
+			if err := process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-clients[i].done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("proxy exit did not disconnect the client")
+			}
+			if clients[i].err == nil || !strings.Contains(clients[i].err.Error(), "proxy") {
+				t.Fatal("proxy exit was not reported", clients[i].err)
+			}
+		}
+		clients[i].close()
+		if err := process.Signal(syscall.Signal(0)); !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("proxy %d was not reaped: %v", pid, err)
+		}
+		if i == 0 {
+			if _, err := call[json.RawMessage](clients[1], "initialize", struct{}{}); err != nil {
+				t.Fatal("closing one proxy disconnected another", err)
+			}
+		}
+	}
+}
+
+func TestProxyCanCloseWhileHandshaking(t *testing.T) {
+	path := fixtureExecutable(t)
+	entered := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("PENCODE_CODEX_PROXY_URL", "ws"+strings.TrimPrefix(server.URL, "http"))
+	client, err := startClient(t.Context(), t.TempDir(), path, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.close)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not forward the WebSocket handshake")
+	}
+	closed := make(chan struct{})
+	go func() { client.close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing waited for the WebSocket handshake")
+	}
+}
+
 func TestRejectedDefaultSocketDoesNotStartDaemon(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
+	path := fixtureExecutable(t)
 	t.Setenv("PENCODE_CODEX_SERVER_URL", "")
 	linkDefaultSocket(t, unixRPCServer(t, true))
-	client, err := startClient(t.Context(), t.TempDir(), t.TempDir(), "", nil)
+	client, err := startClient(t.Context(), t.TempDir(), path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

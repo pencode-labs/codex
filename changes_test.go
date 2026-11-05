@@ -77,7 +77,7 @@ func TestFileChangesAfterTurnCompletion(t *testing.T) {
 			if first.added != 3 || first.removed != 1 || len(first.files[0].diffs) != 2 {
 				t.Fatal("same file must merge final edit records", first)
 			}
-			view = changePreviewForClick(t, a, "change-file/one/0").View
+			view = changeViewForClick(t, a, "change-file/one/0")
 			validateBindings(t, view)
 			if !strings.Contains(view.HTML, "+&lt;script&gt;") || !strings.Contains(view.HTML, "+extra") || strings.Contains(view.HTML, "<script>") {
 				t.Fatal("file diff was lost or not escaped", view.HTML)
@@ -237,11 +237,10 @@ func TestFileChangesCollapsedPreview(t *testing.T) {
 	if strings.Count(view.HTML, `class="codex-change-file"`) != 3 || strings.Contains(view.HTML, "four.go") || strings.Contains(view.HTML, "five.go") || strings.Contains(view.HTML, "<pre>") || strings.Contains(view.HTML, `data-ref="changes/turn/list" data-pencode-scroll`) || !strings.Contains(view.HTML, "已编辑 5 个文件") {
 		t.Fatal("initial preview must show only three files without diffs or a scroll binding", view.HTML)
 	}
-	preview := changePreviewForClick(t, a, "change-file/turn/0")
-	view = a.composerView()
+	view = changeViewForClick(t, a, "change-file/turn/0")
 	validateBindings(t, view)
-	if strings.Count(view.HTML, `class="codex-change-file"`) != 3 || strings.Contains(view.HTML, "<pre>") || !f.collapsed || !strings.Contains(preview.View.HTML, "+new") {
-		t.Fatal("opening a file preview must preserve the collapsed chat summary", view.HTML)
+	if strings.Count(view.HTML, `class="codex-change-file"`) != 3 || !strings.Contains(view.HTML, "<pre>") || !f.collapsed || !strings.Contains(view.HTML, "+new") {
+		t.Fatal("expanding one diff must preserve the three-file preview", view.HTML)
 	}
 }
 
@@ -305,10 +304,11 @@ func TestHistoryRestoresFileChanges(t *testing.T) {
 		if strings.Count(view.HTML, `class="codex-changes"`) != 1 || !strings.Contains(view.HTML, "saved.go") || strings.Contains(view.HTML, "已处理") {
 			t.Fatal("history lost file changes or estimated an absent duration", view.HTML)
 		}
-		preview := changePreviewForClick(t, a, "change-file/old-turn/0")
-		if !strings.Contains(preview.View.HTML, "+stored") {
+		view = changeViewForClick(t, a, "change-file/old-turn/0")
+		if !strings.Contains(view.HTML, "+stored") {
 			t.Fatal("restored diff did not open")
 		}
+		clickActivity(t, a, "change-file/old-turn/0")
 		a.selectConversation(nil)
 		if len(a.conversations["saved"].items) == 0 {
 			t.Fatal("leaving a conversation lost its cached diffs")
@@ -319,25 +319,25 @@ func TestHistoryRestoresFileChanges(t *testing.T) {
 	}
 }
 
-func changePreviewForClick(t *testing.T, a *agent, ref string) peb.UI {
+func changeViewForClick(t *testing.T, a *agent, ref string) *peb.EditorView {
 	t.Helper()
 	updates := make(chan peb.UI, 2)
 	previous := a.publisher
 	a.publisher = syncPublisher{updates: updates}
 	defer func() { a.publisher = previous }()
 	clickActivity(t, a, ref)
-	if len(updates) != 2 {
-		t.Fatalf("preview must publish its content and reveal its tab: got %d updates", len(updates))
+	if len(updates) != 0 {
+		t.Fatal("file click must expand inline without publishing another surface")
 	}
-	ui, reveal := <-updates, <-updates
-	if ui.Kind != peb.EditorTab || ui.View == nil || reveal.ID != ui.ID || reveal.View != nil {
-		t.Fatal("file click did not open and reveal a diff tab", ui, reveal)
+	if !a.selected.dirty {
+		t.Fatal("file click did not invalidate the conversation")
 	}
-	validateBindings(t, ui.View)
-	return ui
+	view := a.composerView()
+	validateBindings(t, view)
+	return view
 }
 
-func TestLiveFileChangePreviews(t *testing.T) {
+func TestLiveFileChangesExpandInline(t *testing.T) {
 	root := t.TempDir()
 	f := newTurnFiles(`turn/"one`, root)
 	edit := threadItem{Type: "fileChange", Status: "completed", Changes: []change{
@@ -353,20 +353,30 @@ func TestLiveFileChangePreviews(t *testing.T) {
 	if len(f.liveBindings) != 2 || !strings.Contains(view.HTML, `<button type="button" class="codex-live-change" data-ref="change-file/turn/&#34;one/0"`) {
 		t.Fatal("live file rows must have click bindings", view.HTML, f.liveBindings)
 	}
-	first := changePreviewForClick(t, a, `change-file/turn/"one/0`)
-	if first.Context.ProjectPath != root || first.Title != "<file>.go · 差异" || !strings.Contains(first.View.HTML, "+&lt;new&gt;") || strings.Contains(first.View.HTML, "<new>") {
-		t.Fatal("preview lost its title, context or escaped diff", first)
+	view = changeViewForClick(t, a, `change-file/turn/"one/0`)
+	if !strings.Contains(view.HTML, "+&lt;new&gt;") || strings.Contains(view.HTML, "<new>") || !f.files[0].expanded || f.files[1].expanded {
+		t.Fatal("only the clicked file must expand with an escaped diff", view.HTML)
 	}
-	second := changePreviewForClick(t, a, `change-file/turn/"one/1`)
-	if first.ID == second.ID || !strings.Contains(second.View.HTML, `class="codex-diff-removed">deleted`) {
-		t.Fatal("same-name files must open distinct previews with deletion highlighting", second)
+	view = changeViewForClick(t, a, `change-file/turn/"one/1`)
+	if !strings.Contains(view.HTML, `class="codex-diff-removed">deleted`) || !f.files[0].expanded || !f.files[1].expanded {
+		t.Fatal("same-name files must expand independently", view.HTML)
 	}
 	f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "src/<file>.go", Diff: "+next\n"}}})
 	view = a.composerView()
 	validateBindings(t, view)
-	updated := changePreviewForClick(t, a, `change-file/turn/"one/0`)
-	if updated.ID != first.ID || !strings.Contains(updated.View.HTML, "+next") || f.complete || !f.collapsed || !c.busy || strings.Contains(view.HTML, "<pre>") || len(f.liveBindings) != 2 {
-		t.Fatal("reopening a live preview must reuse its tab and include new edits without changing the chat", updated)
+	if !strings.Contains(view.HTML, "+next") || f.complete || !f.collapsed || !c.busy || len(f.liveBindings) != 2 {
+		t.Fatal("live updates must preserve expanded diffs and running state", view.HTML)
+	}
+	view = changeViewForClick(t, a, `change-file/turn/"one/0`)
+	if f.files[0].expanded || !f.files[1].expanded || strings.Contains(view.HTML, "+next") {
+		t.Fatal("clicking again must collapse only that file", view.HTML)
+	}
+	view = changeViewForClick(t, a, `change-file/turn/"one/1`)
+	if strings.Contains(view.HTML, "<pre>") {
+		t.Fatal("all diffs should now be collapsed", view.HTML)
+	}
+	if allocations := testing.AllocsPerRun(100, func() { c.handleChangesClick(`change-file/turn/"one/0`) }); allocations != 0 {
+		t.Fatalf("file toggle allocated %g objects", allocations)
 	}
 	updates := make(chan peb.UI, 2)
 	a.publisher = syncPublisher{updates: updates}
@@ -378,16 +388,17 @@ func TestLiveFileChangePreviews(t *testing.T) {
 	}
 }
 
-func TestFileChangePreviewBounds(t *testing.T) {
+func TestInlineFileChangeBounds(t *testing.T) {
 	for _, diff := range []string{strings.Repeat("+界<&\n", 100000), strings.Repeat("+\n-\n", 100000)} {
 		f := newTurnFiles("turn", t.TempDir())
 		f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "large.go", Diff: diff}}})
 		a := &agent{selected: &conversation{files: f}}
-		ui := changePreviewForClick(t, a, "change-file/turn/0")
-		if !utf8.ValidString(ui.View.HTML) || !strings.Contains(ui.View.HTML, "部分 diff 已省略") {
+		a.selected.busy = true
+		view := changeViewForClick(t, a, "change-file/turn/0")
+		if !utf8.ValidString(view.HTML) || len(view.HTML) > 256<<10 || !strings.Contains(view.HTML, "部分 diff 已省略") {
 			t.Fatal("large preview must remain valid UTF-8 and explain truncation")
 		}
-		if _, err := peb.EncodeUI(nil, ui); err != nil {
+		if _, err := peb.EncodeUI(nil, peb.UI{ID: "composer", Title: "Codex", Kind: peb.EditorTab, View: view}); err != nil {
 			t.Fatal("preview exceeded the extension transport budget", err)
 		}
 	}

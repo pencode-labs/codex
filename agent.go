@@ -20,10 +20,10 @@ var stderrWriter = os.Stderr
 type input struct {
 	Type         string     `json:"type"`
 	Text         string     `json:"text,omitempty"`
-	TextElements []struct{} `json:"text_elements,omitempty"`
 	Name         string     `json:"name,omitempty"`
 	Path         string     `json:"path,omitempty"`
 	URL          string     `json:"url,omitempty"`
+	TextElements []struct{} `json:"text_elements,omitempty"`
 }
 type change struct {
 	Path string `json:"path"`
@@ -40,31 +40,31 @@ type commandAction struct {
 	Query   string `json:"query"`
 }
 type threadItem struct {
-	ID               string          `json:"id"`
-	StartedAtMs      int64           `json:"startedAtMs"`
+	ExitCode         *int            `json:"exitCode"`
+	AggregatedOutput string          `json:"aggregatedOutput"`
+	Query            string          `json:"query"`
 	Type             string          `json:"type"`
 	Text             string          `json:"text"`
 	Phase            string          `json:"phase"`
-	Content          []input         `json:"content"`
-	Summary          []string        `json:"summary"`
-	Command          string          `json:"command"`
-	CommandActions   []commandAction `json:"commandActions"`
-	Status           string          `json:"status"`
-	ExitCode         *int            `json:"exitCode"`
-	AggregatedOutput string          `json:"aggregatedOutput"`
-	Changes          []change        `json:"changes"`
-	Server           string          `json:"server"`
 	Tool             string          `json:"tool"`
-	Query            string          `json:"query"`
+	Server           string          `json:"server"`
+	Command          string          `json:"command"`
+	ID               string          `json:"id"`
+	Status           string          `json:"status"`
+	CommandActions   []commandAction `json:"commandActions"`
+	Changes          []change        `json:"changes"`
+	Summary          []string        `json:"summary"`
+	Content          []input         `json:"content"`
+	StartedAtMs      int64           `json:"startedAtMs"`
 }
 type turn struct {
+	Error       *rpcError    `json:"error"`
+	DurationMs  *int64       `json:"durationMs"`
 	ID          string       `json:"id"`
 	Status      string       `json:"status"`
 	Items       []threadItem `json:"items"`
-	Error       *rpcError    `json:"error"`
 	StartedAt   int64        `json:"startedAt"`
 	CompletedAt int64        `json:"completedAt"`
-	DurationMs  *int64       `json:"durationMs"`
 }
 type thread struct {
 	ID      string       `json:"id"`
@@ -76,54 +76,54 @@ type threadStatus struct {
 	Type string `json:"type"`
 }
 type chatItem struct {
-	data          threadItem
+	sentAt        time.Time
 	progress      *turnProgress
 	files         *turnFiles
-	text, output  strings.Builder
-	complete      bool
-	expanded      bool
+	html          string
 	detailRef     string
 	groupRef      string
-	groupExpanded bool
-	sweep         bool
-	html          string
-	linkBindings  []peb.EditorBinding
+	text, output  strings.Builder
 	images        []string
-	sentAt        time.Time
+	linkBindings  []peb.EditorBinding
+	data          threadItem
+	expanded      bool
+	sweep         bool
+	groupExpanded bool
+	complete      bool
 }
 type approval struct {
-	id      json.RawMessage
-	method  string
-	params  json.RawMessage
 	answers map[string]string
+	method  string
+	id      json.RawMessage
+	params  json.RawMessage
 }
 type conversation struct {
+	syncAfter time.Time
+	editing   *chatItem
+	titleJob  *titleJob
+	progress  *turnProgress
+	files     *turnFiles
 	thread
-	titleJob                     *titleJob
-	progress                     *turnProgress
-	files                        *turnFiles
-	context                      peb.ActionContext
-	items                        []*chatItem
-	requests                     []*approval
+	observedTurn, observedStatus string
 	draft, turnID, cursor        string
 	status                       string
+	syncError                    string
+	editDraft                    string
+	requests                     []*approval
+	items                        []*chatItem
+	editInputs                   []input
+	context                      peb.ActionContext
 	turnRevision                 uint64
-	busy, dirty, loaded          bool
+	editRevision                 uint64
+	observedDigest               [32]byte
 	unread                       bool
 	observing                    bool
-	observedTurn, observedStatus string
-	observedDigest               [32]byte
-	syncAfter                    time.Time
-	syncError                    string
-	editing                      *chatItem
-	editDraft                    string
-	editInputs                   []input
-	editRevision                 uint64
+	busy, dirty, loaded          bool
 	editReverted                 bool
 }
 type threadPage struct {
-	Data       []thread `json:"data"`
 	NextCursor string   `json:"nextCursor"`
+	Data       []thread `json:"data"`
 }
 
 func (p *threadPage) contains(id string) bool {
@@ -150,38 +150,38 @@ func (p *threadPage) compact() {
 type agent struct {
 	ctx                                        context.Context
 	publisher                                  uiPublisher
-	commands                                   chan command
-	pending                                    [64]command
-	pendingHead, pendingCount                  int
+	images                                     map[attachmentScope][]imageAttachment
+	drafts                                     map[string]string
 	done                                       chan struct{}
 	client                                     *rpcClient
-	executablePath                             string
-	serverURL                                  string
-	context                                    peb.ActionContext
+	filePicker                                 *filePicker
+	attachments                                map[attachmentScope][]string
+	commands                                   chan command
 	conversations                              map[string]*conversation
 	selected                                   *conversation
-	drafts                                     map[string]string
-	attachments                                map[attachmentScope][]string
-	images                                     map[attachmentScope][]imageAttachment
-	filePicker                                 *filePicker
-	model, status                              string
 	effort, pendingModel                       string
-	history                                    threadPage
-	showHistory, workspaceOpen, workspaceDirty bool
-	historyDirty, historyLoading               bool
+	model, status                              string
+	executablePath                             string
+	serverURL                                  string
 	composerPrefix                             string
-	composerBindings                           []peb.EditorBinding
-	completion                                 composerCompletion
-	turnInputs                                 []input
-	revealWorkspace                            bool
-	workspaceHidden                            bool
-	modelSettings                              bool
-	models                                     []modelOption
-	modelsLoaded                               bool
-	modelError                                 string
-	permissionIndex                            int
-	permissionSettings, permissionHelp         bool
 	renameID, renameValue                      string
+	modelError                                 string
+	history                                    threadPage
+	turnInputs                                 []input
+	composerBindings                           []peb.EditorBinding
+	models                                     []modelOption
+	context                                    peb.ActionContext
+	pending                                    [64]command
+	completion                                 composerCompletion
+	pendingHead, pendingCount                  int
+	permissionIndex                            int
+	modelSettings                              bool
+	workspaceHidden                            bool
+	modelsLoaded                               bool
+	historyDirty, historyLoading               bool
+	showHistory, workspaceOpen, workspaceDirty bool
+	revealWorkspace                            bool
+	permissionSettings, permissionHelp         bool
 }
 
 func (a *agent) run() {
@@ -278,8 +278,8 @@ func (a *agent) reportError(err error) {
 	}
 }
 
-// RPC waits still service tab lifecycle events. Other commands stay ordered
-// until the current request completes, without starting nested RPC calls.
+// RPC waits still service tab lifecycle events and transcript toggles. Commands
+// that may start another RPC stay ordered until the current request completes.
 func (a *agent) handlePendingCommand(cmd command) {
 	if cmd.lifecycle != nil && cmd.lifecycle.Kind != peb.ProjectClosed {
 		a.processCommand(cmd)
@@ -290,6 +290,10 @@ func (a *agent) handlePendingCommand(cmd command) {
 		return
 	}
 	if !cmd.action {
+		if cmd.event.ID == "composer" && cmd.event.Event.Kind == "click" && a.toggleTranscript(cmd.event.Event.Ref) {
+			a.flush()
+			return
+		}
 		switch cmd.event.Event.Kind {
 		case "open", "close", "closerequest", "visibilitychange":
 			a.processCommand(cmd)
@@ -448,7 +452,7 @@ func (a *agent) handleCommand(cmd command) error {
 	if e.ID == "files" {
 		return a.handleFileEvent(e.Event)
 	}
-	if e.Event.Kind == "click" && (e.ID == "composer" || strings.HasPrefix(e.ID, "directory/")) {
+	if e.Event.Kind == "click" && (e.ID == "composer" || strings.HasPrefix(e.ID, "directory-")) {
 		if ref, ok := strings.CutPrefix(e.Event.Ref, "directory/"); ok {
 			name, _, _ := strings.Cut(ref, "/")
 			return a.openDirectoryLink(name, e.Context)
@@ -553,11 +557,7 @@ func (a *agent) handleCommand(cmd command) error {
 				return a.loadHistory(c)
 			}
 		default:
-			if c != nil && strings.HasPrefix(e.Event.Ref, "turn/") {
-				if p := c.turnProgress(strings.TrimPrefix(e.Event.Ref, "turn/")); p != nil && p.complete {
-					p.expanded = !p.expanded
-					c.dirty = true
-				}
+			if a.toggleTranscript(e.Event.Ref) {
 				return nil
 			}
 			if id, ok := strings.CutPrefix(e.Event.Ref, "edit-message/"); ok {
@@ -575,9 +575,6 @@ func (a *agent) handleCommand(cmd command) error {
 				}
 				return nil
 			}
-			if ref, ok := strings.CutPrefix(e.Event.Ref, "change-file/"); ok {
-				return a.openChangePreview(ref)
-			}
 			if c != nil && c.handleChangesClick(e.Event.Ref) {
 				return nil
 			}
@@ -586,27 +583,6 @@ func (a *agent) handleCommand(cmd command) error {
 			}
 			if index, ok := strings.CutPrefix(e.Event.Ref, "remove-file/"); ok {
 				a.removeAttachment(index)
-				return nil
-			}
-			if c != nil && strings.HasPrefix(e.Event.Ref, "item/") {
-				for _, i := range c.items {
-					if i.detailRef == e.Event.Ref {
-						i.expanded = !i.expanded
-						i.html = ""
-						c.dirty = true
-						break
-					}
-				}
-				return nil
-			}
-			if c != nil && strings.HasPrefix(e.Event.Ref, "activity/") {
-				for _, i := range c.items {
-					if i.groupRef == e.Event.Ref {
-						i.groupExpanded = !i.groupExpanded
-						c.dirty = true
-						break
-					}
-				}
 				return nil
 			}
 			if id, ok := strings.CutPrefix(e.Event.Ref, "history/"); ok {
@@ -619,6 +595,43 @@ func (a *agent) handleCommand(cmd command) error {
 		}
 	}
 	return nil
+}
+
+// Transcript expansion changes only local view state and can be rendered while
+// a background history request is waiting for the server.
+func (a *agent) toggleTranscript(ref string) bool {
+	c := a.selected
+	if c == nil {
+		return false
+	}
+	kind, id, ok := strings.Cut(ref, "/")
+	if !ok {
+		return false
+	}
+	switch kind {
+	case "turn":
+		if p := c.turnProgress(id); p != nil && p.complete {
+			p.expanded = !p.expanded
+			c.dirty = true
+		}
+	case "item", "activity":
+		for _, i := range c.items {
+			if kind == "item" && i.detailRef == ref {
+				i.expanded = !i.expanded
+				i.html = ""
+				c.dirty = true
+				break
+			}
+			if kind == "activity" && i.groupRef == ref {
+				i.groupExpanded = !i.groupExpanded
+				c.dirty = true
+				break
+			}
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 func (a *agent) startThread() (*conversation, error) {
@@ -742,13 +755,13 @@ func (a *agent) startTurn(c *conversation, inputs []input) error {
 	a.flush()
 	p := a.permission()
 	params := struct {
+		approvalSettings
 		ThreadID      string        `json:"threadId"`
-		Input         []input       `json:"input"`
 		Model         string        `json:"model,omitempty"`
 		Effort        string        `json:"effort,omitempty"`
+		Input         []input       `json:"input"`
 		SandboxPolicy sandboxPolicy `json:"sandboxPolicy"`
-		approvalSettings
-	}{c.ID, inputs, a.model, a.turnEffort(), p.policy, p.approvalSettings}
+	}{ThreadID: c.ID, Input: inputs, Model: a.model, Effort: a.turnEffort(), SandboxPolicy: p.policy, approvalSettings: p.approvalSettings}
 	result, err := call[struct {
 		Turn turn `json:"turn"`
 	}](a.client, "turn/start", params)
@@ -793,13 +806,13 @@ func (a *agent) listHistory(cursor string) error {
 		return err
 	}
 	page, err := call[threadPage](a.client, "thread/list", struct {
+		SourceKinds    [3]string `json:"sourceKinds"`
 		Cwd            string    `json:"cwd"`
-		Limit          int       `json:"limit"`
 		SortKey        string    `json:"sortKey"`
 		Cursor         string    `json:"cursor,omitempty"`
-		SourceKinds    [3]string `json:"sourceKinds"`
+		Limit          int       `json:"limit"`
 		UseStateDBOnly bool      `json:"useStateDbOnly"`
-	}{a.context.ProjectPath, 20, "updated_at", cursor, [3]string{"cli", "vscode", "appServer"}, true})
+	}{Cwd: a.context.ProjectPath, Limit: 20, SortKey: "updated_at", Cursor: cursor, SourceKinds: [3]string{"cli", "vscode", "appServer"}, UseStateDBOnly: true})
 	if err != nil {
 		return err
 	}
@@ -851,11 +864,11 @@ func (a *agent) resume(id string) error {
 		result, err := call[struct {
 			Thread thread `json:"thread"`
 		}](a.client, "thread/resume", struct {
-			ThreadID     string `json:"threadId"`
-			ExcludeTurns bool   `json:"excludeTurns"`
-			Sandbox      string `json:"sandbox"`
 			approvalSettings
-		}{id, true, p.sandbox, p.approvalSettings})
+			ThreadID     string `json:"threadId"`
+			Sandbox      string `json:"sandbox"`
+			ExcludeTurns bool   `json:"excludeTurns"`
+		}{ThreadID: id, ExcludeTurns: true, Sandbox: p.sandbox, approvalSettings: p.approvalSettings})
 		loaded := err == nil
 		if err != nil {
 			rpcErr, ok := err.(*rpcError)
@@ -927,15 +940,15 @@ func (a *agent) loadHistory(c *conversation) error {
 func (a *agent) readHistory(c *conversation) error {
 	revision := c.turnRevision
 	page, err := call[struct {
-		Data       []turn `json:"data"`
 		NextCursor string `json:"nextCursor"`
+		Data       []turn `json:"data"`
 	}](a.client, "thread/turns/list", struct {
 		ThreadID      string `json:"threadId"`
-		Limit         int    `json:"limit"`
 		SortDirection string `json:"sortDirection"`
 		ItemsView     string `json:"itemsView"`
 		Cursor        string `json:"cursor,omitempty"`
-	}{c.ID, 10, "desc", "full", c.cursor})
+		Limit         int    `json:"limit"`
+	}{ThreadID: c.ID, Limit: 10, SortDirection: "desc", ItemsView: "full", Cursor: c.cursor})
 	if err != nil {
 		return err
 	}
@@ -1081,6 +1094,7 @@ func (a *agent) onMessage(message envelope) {
 		return
 	}
 	var event struct {
+		Error       *rpcError       `json:"error"`
 		ThreadID    string          `json:"threadId"`
 		ItemID      string          `json:"itemId"`
 		Delta       string          `json:"delta"`
@@ -1088,7 +1102,6 @@ func (a *agent) onMessage(message envelope) {
 		RequestID   json.RawMessage `json:"requestId"`
 		Item        threadItem      `json:"item"`
 		Turn        turn            `json:"turn"`
-		Error       *rpcError       `json:"error"`
 		StartedAtMs int64           `json:"startedAtMs"`
 	}
 	if err := json.Unmarshal(message.Params, &event); err != nil {

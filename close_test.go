@@ -87,12 +87,12 @@ func TestLifecycleCountsHiddenConversationsByProject(t *testing.T) {
 		"idle": {context: peb.ActionContext{ProjectPath: "/one"}},
 	}}
 	for _, tc := range []struct {
-		event peb.LifecycleEvent
 		count string
+		event peb.LifecycleEvent
 	}{
-		{peb.LifecycleEvent{Kind: peb.WindowClosing}, "2"},
-		{peb.LifecycleEvent{Kind: peb.ProjectClosing, ProjectPath: "/one"}, "1"},
-		{peb.LifecycleEvent{Kind: peb.ProjectClosing, ProjectPath: "/idle"}, ""},
+		{event: peb.LifecycleEvent{Kind: peb.WindowClosing}, count: "2"},
+		{event: peb.LifecycleEvent{Kind: peb.ProjectClosing, ProjectPath: "/one"}, count: "1"},
+		{event: peb.LifecycleEvent{Kind: peb.ProjectClosing, ProjectPath: "/idle"}, count: ""},
 	} {
 		reply := a.handleLifecycle(tc.event)
 		if tc.count == "" && reply.Message != "" || tc.count != "" && !strings.Contains(reply.Message, tc.count+" 个会话") {

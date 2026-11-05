@@ -7,12 +7,12 @@ import (
 )
 
 type turnProgress struct {
-	id                 string
 	started            time.Time
+	id                 string
+	toggleRef          string
 	elapsed            time.Duration
 	received, complete bool
 	expanded           bool
-	toggleRef          string
 }
 
 func (c *conversation) turnProgress(id string) *turnProgress {

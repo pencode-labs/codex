@@ -20,6 +20,12 @@ import (
 // A single backend holds the active turn across connections and replays its
 // pending approval before thread/resume responds, as a shared server can do.
 func TestSharedSessionSurvivesClientCloseAndReconnect(t *testing.T) {
+	for _, transport := range []string{"websocket", "proxy"} {
+		t.Run(transport, func(t *testing.T) { testSharedSessionSurvivesClientCloseAndReconnect(t, transport) })
+	}
+}
+
+func testSharedSessionSurvivesClientCloseAndReconnect(t *testing.T, transport string) {
 	ctx := t.Context()
 	var mutex sync.Mutex
 	connections := make(map[*websocket.Conn]bool)
@@ -113,6 +119,11 @@ func TestSharedSessionSurvivesClientCloseAndReconnect(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	if transport == "proxy" {
+		fixtureExecutable(t)
+		t.Setenv("PENCODE_CODEX_PROXY_URL", endpoint)
+		endpoint = "unix://"
+	}
 	root := t.TempDir()
 	open := func() *agent {
 		a := &agent{ctx: ctx, serverURL: endpoint, context: peb.ActionContext{ProjectPath: root}, conversations: make(map[string]*conversation), workspaceOpen: true}
@@ -190,13 +201,13 @@ func TestSharedSessionSurvivesClientCloseAndReconnect(t *testing.T) {
 	}
 }
 
-// Real CLI coverage exercises default socket discovery, its Unix handshake,
-// and writer ownership. Injecting an item materializes history without inference.
+// Real CLI coverage exercises separate proxies sharing one server and writer
+// ownership. Injecting an item materializes history without inference.
 func TestLiveSharedAppServer(t *testing.T) {
 	liveCodexHome(t)
 	root := t.TempDir()
 	liveAppServer(t, root, "")
-	first, err := startClient(t.Context(), root, "", "", nil)
+	first, err := startClient(t.Context(), root, "", "unix://", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

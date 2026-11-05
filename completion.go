@@ -17,28 +17,28 @@ import (
 const maxCompletions = 8
 
 type composerCandidate struct {
+	skill               *skillOption
 	label, detail, path string
 	score               int
-	skill               *skillOption
 }
 
 type composerCompletion struct {
-	kind                 byte
-	start, end, selected int // Byte offsets in the draft; events use rune offsets.
-	query                string
 	items                [maxCompletions]composerCandidate
-	count                int
-	caret                int
-	revision             uint64
-	root                 string
-	files                []completionFile
 	indexed              time.Time
 	error                string
-	dismissed            string
-	dismissedCaret       uint32
-	skills               []skillOption
-	skillsLoaded         bool
+	root                 string
+	query                string
 	skillError           string
+	dismissed            string
+	skills               []skillOption
+	files                []completionFile
+	count                int
+	revision             uint64
+	start, end, selected int // Byte offsets in the draft; events use rune offsets.
+	caret                int
+	dismissedCaret       uint32
+	kind                 byte
+	skillsLoaded         bool
 }
 
 type completionFile struct{ path, folded string }
