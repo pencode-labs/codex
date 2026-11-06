@@ -32,7 +32,8 @@ func previewID(kind, key string) string {
 	return kind + "-" + string(encoded[:])
 }
 
-var chatParser = parser.New(parser.WithExtensions(extension.TableParser, extension.NewLinkifyParser()))
+// Simple delimiter rules allow emphasis beside CJK punctuation without spaces.
+var chatParser = parser.New(parser.WithParseDelimiterFunc(parser.ParseDelimiterSimple), parser.WithExtensions(extension.TableParser, extension.NewLinkifyParser()))
 var chatRenderer = markdownhtml.New(markdownhtml.WithHardWraps(), markdownhtml.WithExtensions(extension.TableHTMLRenderer), markdownhtml.WithNodeRendererDecorators(map[ast.NodeKind]markdownhtml.NodeRendererDecorator{
 	ast.KindLink: chatLinkDecorator, ast.KindAutoLink: chatLinkDecorator,
 }))
@@ -99,6 +100,14 @@ func (a *agent) composerView() *peb.EditorView {
 		draft, title, busy = a.selected.draft, a.selected.title(), a.selected.busy
 	}
 	b.WriteString(`<section class="codex-composer">`)
+	if a.selected != nil {
+		for _, r := range a.selected.requests {
+			if r.questions != nil {
+				bindings = r.questions.render(&b, bindings)
+				break
+			}
+		}
+	}
 	if busy && a.selected.files != nil && !a.selected.files.complete {
 		a.selected.files.prepareLive()
 		b.WriteString(a.selected.files.liveHTML)
@@ -110,15 +119,22 @@ func (a *agent) composerView() *peb.EditorView {
 	if images := a.images[a.attachmentScope()]; len(images) > 0 {
 		b.WriteString(`<div class="codex-images" aria-label="附加图片">`)
 		for index, image := range images {
-			ref := "remove-image/" + strconv.Itoa(index)
-			b.WriteString(`<button class="codex-image" type="button" data-ref="`)
-			b.WriteString(ref)
-			b.WriteString(`" title="移除图片" aria-label="移除图片 `)
+			previewRef := "preview-image/" + strconv.Itoa(index)
+			removeRef := "remove-image/" + strconv.Itoa(index)
+			b.WriteString(`<div class="codex-image"><button class="codex-image-open" type="button" data-ref="`)
+			b.WriteString(previewRef)
+			b.WriteString(`" title="预览图片" aria-haspopup="dialog" aria-label="预览图片 `)
 			b.WriteString(strconv.Itoa(index + 1))
 			b.WriteString(`"><img src="`)
 			b.WriteString(image.preview)
-			b.WriteString(`" alt="待发送图片"><span aria-hidden="true">×</span></button>`)
-			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
+			b.WriteString(`" alt="待发送图片"></button><button class="codex-icon-button codex-image-remove" type="button" data-ref="`)
+			b.WriteString(removeRef)
+			b.WriteString(`" title="移除图片" aria-label="移除图片 `)
+			b.WriteString(strconv.Itoa(index + 1))
+			b.WriteString(`"><img id="pencode-extension-codex-remove-image-icon-`)
+			b.WriteString(strconv.Itoa(index))
+			b.WriteString(`" src="resources/icons/x.svg" alt=""></button></div>`)
+			bindings = append(bindings, peb.EditorBinding{Ref: previewRef, Kind: "click"}, peb.EditorBinding{Ref: removeRef, Kind: "click"})
 		}
 		b.WriteString(`</div>`)
 	}
@@ -329,7 +345,7 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding, 
 				size += len(files.html)
 			}
 		}
-		if i.html == "" {
+		if i.html == "" && i.data.Type != "imageView" {
 			var fragment strings.Builder
 			i.render(&fragment, c.context.ProjectPath, fmt.Sprintf("%p", i))
 			i.html = fragment.String()
@@ -372,7 +388,9 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding, 
 		renderChatStatus(b, status)
 	}
 	for _, r := range c.requests {
-		bindings = r.render(b, bindings)
+		if r.questions == nil {
+			bindings = r.render(b, bindings)
+		}
 	}
 	b.WriteString(`</article>`)
 	return bindings
@@ -426,6 +444,15 @@ func (c *conversation) renderTurn(b *strings.Builder, bindings []peb.EditorBindi
 func (c *conversation) renderItems(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, latestActivity int) []peb.EditorBinding {
 	for index := 0; index < len(items); {
 		i := items[index]
+		if i.data.Type == "imageView" {
+			end := index + 1
+			for end < len(items) && items[end].data.Type == "imageView" {
+				end++
+			}
+			bindings = renderViewedImages(b, bindings, items[index:end], c.context.ProjectPath)
+			index = end
+			continue
+		}
 		if i.activityKinds() != 0 {
 			end := index + 1
 			for end < len(items) && items[end].activityKinds() != 0 {
@@ -497,7 +524,10 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 	}
 	b.WriteString(`">`)
 	if i.data.Type == "userMessage" {
-		b.WriteString(`<div class="codex-user-bubble">`)
+		i.renderImages(b)
+		if i.text.Len() > 0 {
+			b.WriteString(`<div class="codex-user-bubble">`)
+		}
 	}
 	if activity {
 		hasDetails := i.text.Len() > 0 || i.output.Len() > 0 || i.data.Command != "" || len(i.data.Changes) > 0
@@ -539,25 +569,12 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 	}
 	if i.text.Len() > 0 && (i.data.Type != "userMessage" || !renderQuestionReplies(b, i.text.String())) {
 		if i.complete && (i.data.Type == "userMessage" || i.data.Type == "agentMessage" || i.data.Type == "plan") {
-			i.linkBindings = renderMarkdown(b, i.text.String(), root, scope)
+			i.linkBindings = append(i.linkBindings, renderMarkdown(b, i.text.String(), root, scope)...)
 		} else {
 			b.WriteString(`<div class="codex-text" data-pencode-preserve-whitespace>`)
 			b.WriteString(html.EscapeString(i.text.String()))
 			b.WriteString(`</div>`)
 		}
-	}
-	if len(i.images) > 0 {
-		b.WriteString(`<div class="codex-images" aria-label="消息图片">`)
-		for _, preview := range i.images {
-			if preview == "" {
-				b.WriteString(`<span class="codex-muted">[图片]</span>`)
-				continue
-			}
-			b.WriteString(`<img class="codex-message-image" src="`)
-			b.WriteString(preview)
-			b.WriteString(`" alt="已发送图片">`)
-		}
-		b.WriteString(`</div>`)
 	}
 	if i.data.Command != "" {
 		pre(b, i.data.Command)
@@ -575,7 +592,9 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 		b.WriteString(`</div>`)
 	}
 	if i.data.Type == "userMessage" {
-		b.WriteString(`</div>`)
+		if i.text.Len() > 0 {
+			b.WriteString(`</div>`)
+		}
 		i.renderMessageActions(b)
 	}
 	b.WriteString(`</section>`)
@@ -609,51 +628,11 @@ func renderMarkdown(b *strings.Builder, source, root, scope string) []peb.Editor
 func (r *approval) render(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
 	b.WriteString(`<section class="codex-approval"><h3>Codex 需要你的确认</h3>`)
 	id := string(r.id)
-	if r.method == "item/tool/requestUserInput" {
-		var params struct {
-			Questions []struct {
-				ID       string `json:"id"`
-				Question string `json:"question"`
-				Options  []struct {
-					Label       string `json:"label"`
-					Description string `json:"description"`
-				} `json:"options"`
-				IsSecret bool `json:"isSecret"`
-			} `json:"questions"`
-		}
-		if json.Unmarshal(r.params, &params) == nil {
-			for _, q := range params.Questions {
-				b.WriteString(`<p>`)
-				b.WriteString(html.EscapeString(q.Question))
-				b.WriteString(`</p>`)
-				for _, option := range q.Options {
-					b.WriteString(`<p class="codex-muted">`)
-					b.WriteString(html.EscapeString(option.Label + " — " + option.Description))
-					b.WriteString(`</p>`)
-				}
-				ref := "answer/" + id + "/" + q.ID
-				b.WriteString(`<input data-ref="`)
-				b.WriteString(html.EscapeString(ref))
-				b.WriteString(`" aria-label="`)
-				b.WriteString(html.EscapeString(q.Question))
-				b.WriteString(`" value="`)
-				b.WriteString(html.EscapeString(r.answers[q.ID]))
-				b.WriteString(`"`)
-				if q.IsSecret {
-					b.WriteString(` type="password"`)
-				}
-				b.WriteString(`>`)
-				bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "input"})
-			}
-		}
-		bindings = actionButton(b, bindings, "answer/"+id, "提交回答")
-	} else {
-		var formatted bytes.Buffer
-		_ = json.Indent(&formatted, r.params, "", "  ")
-		pre(b, formatted.String())
-		bindings = actionButton(b, bindings, "accept/"+id, "允许本次操作")
-		bindings = actionButton(b, bindings, "decline/"+id, "拒绝")
-	}
+	var formatted bytes.Buffer
+	_ = json.Indent(&formatted, r.params, "", "  ")
+	pre(b, formatted.String())
+	bindings = actionButton(b, bindings, "accept/"+id, "允许本次操作")
+	bindings = actionButton(b, bindings, "decline/"+id, "拒绝")
 	b.WriteString(`</section>`)
 	return bindings
 }

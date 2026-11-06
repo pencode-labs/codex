@@ -1,0 +1,167 @@
+package main
+
+import (
+	"html"
+	"strconv"
+	"strings"
+
+	"github.com/pencode-labs/pencode/peb"
+)
+
+type userInputOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+type userInputQuestion struct {
+	ID       string `json:"id"`
+	Header   string `json:"header"`
+	Question string `json:"question"`
+	draft    string
+	Options  []userInputOption `json:"options"`
+	selected int
+	IsOther  bool `json:"isOther"`
+	IsSecret bool `json:"isSecret"`
+}
+
+type userInputRequest struct {
+	ref       string
+	Questions []userInputQuestion `json:"questions"`
+	current   int
+}
+
+type userInputAnswer struct {
+	Answers []string `json:"answers"`
+}
+
+// The built-in question tool is disabled in Default mode unless the host opts in.
+type questionConfig struct {
+	RequestUserInput bool `json:"features.default_mode_request_user_input"`
+}
+
+func (q *userInputQuestion) allowsText() bool { return q.IsOther || len(q.Options) == 0 }
+
+func (q *userInputQuestion) value() string {
+	if q.selected >= 0 && q.selected < len(q.Options) {
+		return q.Options[q.selected].Label
+	}
+	return strings.TrimSpace(q.draft)
+}
+
+// Parse once on receipt; editing and selecting answers do not allocate or decode JSON.
+func (a *agent) handleQuestionEvent(e peb.EditorEvent) (bool, error) {
+	if !strings.HasPrefix(e.Ref, "question-") {
+		return false, nil
+	}
+	c := a.selected
+	if c == nil {
+		return true, nil
+	}
+	ref, rest, _ := strings.Cut(e.Ref, "/")
+	index, action, _ := strings.Cut(rest, "/")
+	n, err := strconv.Atoi(index)
+	if err != nil {
+		return true, nil
+	}
+	for _, r := range c.requests {
+		p := r.questions
+		if p == nil || p.ref != ref || p.current != n {
+			continue
+		}
+		q := &p.Questions[n]
+		switch {
+		case e.Kind == "input" && action == "input" && q.allowsText():
+			if q.draft != e.Value || q.selected != -1 {
+				q.draft, q.selected = e.Value, -1
+				c.dirty = true
+			}
+		case e.Kind == "click" && strings.HasPrefix(action, "select/"):
+			option, err := strconv.Atoi(strings.TrimPrefix(action, "select/"))
+			if err == nil && option >= 0 && option < len(q.Options) && q.selected != option {
+				q.selected, q.draft = option, ""
+				c.dirty = true
+			}
+		case e.Kind == "click" && (action == "skip" || action == "close"):
+			return true, a.answer(c, string(r.id), "skip")
+		case e.Kind == "click" && action == "back" && n > 0:
+			p.current--
+			c.dirty = true
+		case e.Kind == "click" && action == "next" || e.Kind == "submit" && action == "form":
+			if q.value() == "" {
+				return true, nil
+			}
+			if n+1 < len(p.Questions) {
+				p.current++
+				c.dirty = true
+			} else {
+				return true, a.answer(c, string(r.id), "answer")
+			}
+		}
+		return true, nil
+	}
+	return true, nil
+}
+
+func (p *userInputRequest) render(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
+	q := &p.Questions[p.current]
+	ref := p.ref + "/" + strconv.Itoa(p.current) + "/"
+	b.WriteString(`<form class="codex-question-card" data-ref="`)
+	b.WriteString(ref + `form" aria-label="问题"><header class="codex-question-header"><span class="codex-question-symbol" aria-hidden="true">?</span><span>问题</span>`)
+	if q.Header != "" {
+		b.WriteString(`<span class="codex-question-topic">` + html.EscapeString(q.Header) + `</span>`)
+	}
+	if len(p.Questions) > 1 {
+		b.WriteString(`<span class="codex-question-count">` + strconv.Itoa(p.current+1) + " / " + strconv.Itoa(len(p.Questions)) + `</span>`)
+	}
+	bindings = questionButton(b, bindings, ref+"close", "codex-icon-button codex-question-close", "关闭问题并跳过", "×", false)
+	b.WriteString(`</header><div class="codex-question-body"><h3>` + html.EscapeString(q.Question) + `</h3>`)
+	if len(q.Options) > 0 {
+		b.WriteString(`<div class="codex-question-options" role="group" aria-label="回答选项">`)
+		for index, option := range q.Options {
+			optionRef := ref + "select/" + strconv.Itoa(index)
+			b.WriteString(`<button type="button" class="codex-question-option" data-ref="` + optionRef + `" aria-pressed="` + strconv.FormatBool(q.selected == index) + `"><span class="codex-question-number">` + strconv.Itoa(index+1) + `</span><span class="codex-question-option-text"><span>` + html.EscapeString(option.Label) + `</span>`)
+			if option.Description != "" {
+				b.WriteString(`<span class="codex-question-description">` + html.EscapeString(option.Description) + `</span>`)
+			}
+			b.WriteString(`</span></button>`)
+			bindings = append(bindings, peb.EditorBinding{Ref: optionRef, Kind: "click"})
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div><footer class="codex-question-footer">`)
+	if q.allowsText() {
+		placeholder := "或自行撰写回复"
+		if len(q.Options) == 0 {
+			placeholder = "填写你的回答"
+		}
+		b.WriteString(`<label class="codex-question-custom"><img src="resources/icons/pencil.svg" alt=""><input data-ref="` + ref + `input" aria-label="` + html.EscapeString(q.Question) + `" placeholder="` + placeholder + `" value="` + html.EscapeString(q.draft) + `"`)
+		if q.IsSecret {
+			b.WriteString(` type="password" autocomplete="off"`)
+		}
+		b.WriteString(`></label>`)
+		bindings = append(bindings, peb.EditorBinding{Ref: ref + "input", Kind: "input"})
+	} else {
+		b.WriteString(`<span class="codex-input-spacer"></span>`)
+	}
+	b.WriteString(`<div class="codex-question-actions">`)
+	if p.current > 0 {
+		bindings = questionButton(b, bindings, ref+"back", "codex-question-back", "上一题", "上一题", false)
+	}
+	bindings = questionButton(b, bindings, ref+"skip", "codex-question-skip", "跳过问题", "跳过", false)
+	label := "发送"
+	if p.current+1 < len(p.Questions) {
+		label = "下一题"
+	}
+	bindings = questionButton(b, bindings, ref+"next", "codex-question-send", label, label, q.value() == "")
+	b.WriteString(`</div></footer></form>`)
+	return append(bindings, peb.EditorBinding{Ref: ref + "form", Kind: "submit"})
+}
+
+func questionButton(b *strings.Builder, bindings []peb.EditorBinding, ref, class, title, label string, disabled bool) []peb.EditorBinding {
+	b.WriteString(`<button type="button" data-ref="` + ref + `" class="` + class + `" title="` + title + `" aria-label="` + title + `"`)
+	if disabled {
+		b.WriteString(` disabled`)
+	}
+	b.WriteString(`>` + label + `</button>`)
+	return append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
+}

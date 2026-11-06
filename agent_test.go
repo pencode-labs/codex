@@ -251,6 +251,13 @@ func fixtureServer() {
 				}
 			}
 			stored := map[string]any{"id": "old-turn", "status": "completed", "items": []map[string]string{{"id": itemID, "type": "agentMessage", "text": text}}}
+			if path := os.Getenv("PENCODE_CODEX_VIEWED_IMAGE"); path != "" {
+				stored["items"] = []threadItem{
+					{ID: "view-one", Type: "imageView", Path: path},
+					{ID: "view-two", Type: "imageView", Path: path},
+					{ID: itemID, Type: "agentMessage", Text: text},
+				}
+			}
 			if mode := os.Getenv("PENCODE_CODEX_TURN_CHANGES"); mode != "" {
 				stored["items"] = []threadItem{
 					{ID: "stored-edit", Type: "fileChange", Status: "completed", Changes: []change{{Path: "saved.go", Diff: "+stored\n"}}},

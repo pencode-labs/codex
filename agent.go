@@ -43,6 +43,7 @@ type threadItem struct {
 	ExitCode         *int            `json:"exitCode"`
 	AggregatedOutput string          `json:"aggregatedOutput"`
 	Query            string          `json:"query"`
+	Path             string          `json:"path"`
 	Type             string          `json:"type"`
 	Text             string          `json:"text"`
 	Phase            string          `json:"phase"`
@@ -83,7 +84,7 @@ type chatItem struct {
 	detailRef     string
 	groupRef      string
 	text, output  strings.Builder
-	images        []string
+	images        []imageAttachment
 	linkBindings  []peb.EditorBinding
 	data          threadItem
 	expanded      bool
@@ -92,10 +93,10 @@ type chatItem struct {
 	complete      bool
 }
 type approval struct {
-	answers map[string]string
-	method  string
-	id      json.RawMessage
-	params  json.RawMessage
+	questions *userInputRequest
+	method    string
+	id        json.RawMessage
+	params    json.RawMessage
 }
 type conversation struct {
 	syncAfter time.Time
@@ -475,6 +476,9 @@ func (a *agent) handleCommand(cmd command) error {
 		return nil
 	}
 	c := a.selected
+	if handled, err := a.handleQuestionEvent(e.Event); handled {
+		return err
+	}
 	switch e.Event.Kind {
 	case "closerequest":
 		return a.requestCloseWorkspace()
@@ -494,15 +498,6 @@ func (a *agent) handleCommand(cmd command) error {
 			a.updateCompletion(e.Event)
 		} else if c != nil && e.Event.Ref == "message-edit-text" && c.editing != nil && !c.busy {
 			c.editDraft = e.Event.Value
-		} else if c != nil {
-			parts := strings.SplitN(e.Event.Ref, "/", 3)
-			if len(parts) == 3 && parts[0] == "answer" {
-				for _, r := range c.requests {
-					if string(r.id) == parts[1] {
-						r.answers[parts[2]] = e.Event.Value
-					}
-				}
-			}
 		}
 	case "completion":
 		if e.Event.Ref == "prompt" {
@@ -567,6 +562,15 @@ func (a *agent) handleCommand(cmd command) error {
 				a.removeImage(index)
 				return nil
 			}
+			if index, ok := strings.CutPrefix(e.Event.Ref, "preview-image/"); ok {
+				return a.openImage(index)
+			}
+			if ref, ok := strings.CutPrefix(e.Event.Ref, "preview-message-image/"); ok {
+				return a.openMessageImage(ref)
+			}
+			if id, ok := strings.CutPrefix(e.Event.Ref, "view-image/"); ok {
+				return a.openViewedImage(id)
+			}
 			if index, ok := strings.CutPrefix(e.Event.Ref, "completion/"); ok {
 				n, err := strconv.Atoi(index)
 				if err == nil && a.completion.kind != 0 && n >= 0 && n < a.completion.count {
@@ -589,7 +593,7 @@ func (a *agent) handleCommand(cmd command) error {
 				return a.openConversation(id)
 			}
 			parts := strings.SplitN(e.Event.Ref, "/", 2)
-			if c != nil && len(parts) == 2 && (parts[0] == "accept" || parts[0] == "decline" || parts[0] == "answer") {
+			if c != nil && len(parts) == 2 && (parts[0] == "accept" || parts[0] == "decline") {
 				return a.answer(c, parts[1], parts[0])
 			}
 		}
@@ -641,11 +645,12 @@ func (a *agent) startThread() (*conversation, error) {
 	}
 	p := a.permission()
 	params := struct {
-		Cwd     string `json:"cwd"`
-		Model   string `json:"model,omitempty"`
-		Sandbox string `json:"sandbox"`
 		approvalSettings
-	}{a.context.ProjectPath, a.model, p.sandbox, p.approvalSettings}
+		Cwd     string         `json:"cwd"`
+		Model   string         `json:"model,omitempty"`
+		Sandbox string         `json:"sandbox"`
+		Config  questionConfig `json:"config"`
+	}{approvalSettings: p.approvalSettings, Cwd: a.context.ProjectPath, Model: a.model, Sandbox: p.sandbox, Config: questionConfig{RequestUserInput: true}}
 	result, err := call[struct {
 		Thread thread `json:"thread"`
 	}](a.client, "thread/start", params)
@@ -865,10 +870,11 @@ func (a *agent) resume(id string) error {
 			Thread thread `json:"thread"`
 		}](a.client, "thread/resume", struct {
 			approvalSettings
-			ThreadID     string `json:"threadId"`
-			Sandbox      string `json:"sandbox"`
-			ExcludeTurns bool   `json:"excludeTurns"`
-		}{ThreadID: id, ExcludeTurns: true, Sandbox: p.sandbox, approvalSettings: p.approvalSettings})
+			ThreadID     string         `json:"threadId"`
+			Sandbox      string         `json:"sandbox"`
+			Config       questionConfig `json:"config"`
+			ExcludeTurns bool           `json:"excludeTurns"`
+		}{ThreadID: id, ExcludeTurns: true, Sandbox: p.sandbox, Config: questionConfig{RequestUserInput: true}, approvalSettings: p.approvalSettings})
 		loaded := err == nil
 		if err != nil {
 			rpcErr, ok := err.(*rpcError)
@@ -1014,6 +1020,7 @@ func newChatItem(item threadItem, complete bool) *chatItem {
 }
 
 func (i *chatItem) replace(item threadItem, complete bool) {
+	sameImage := item.Type == "imageView" && i.data.Type == "imageView" && item.Path == i.data.Path
 	i.data, i.complete = item, complete
 	i.html = ""
 	if item.StartedAtMs > 0 {
@@ -1021,15 +1028,20 @@ func (i *chatItem) replace(item threadItem, complete bool) {
 	}
 	i.text.Reset()
 	i.output.Reset()
-	clear(i.images)
-	i.images = i.images[:0]
+	if !sameImage {
+		clear(i.images)
+		i.images = i.images[:0]
+	}
 	appendText(&i.text, item.Text)
 	for _, part := range item.Content {
 		if part.Type == "text" {
 			appendText(&i.text, part.Text)
 		} else if part.Type == "image" || part.Type == "localImage" {
-			preview, _ := imagePreview(part.URL)
-			i.images = append(i.images, preview)
+			attachment := imageAttachment{}
+			if preview, err := imagePreview(part.URL, 160); err == nil {
+				attachment.url, attachment.preview = part.URL, preview
+			}
+			i.images = append(i.images, attachment)
 		}
 	}
 	if item.Type == "reasoning" {
@@ -1038,7 +1050,7 @@ func (i *chatItem) replace(item threadItem, complete bool) {
 		}
 	}
 	appendText(&i.output, item.AggregatedOutput)
-	// Builders own bounded display text; don't retain duplicate large payloads.
+	// Builders and image attachments own display data; don't retain duplicate payloads.
 	i.data.Text = ""
 	i.data.Content = nil
 	i.data.Summary = nil
@@ -1122,7 +1134,19 @@ func (a *agent) onMessage(message envelope) {
 	if len(message.ID) > 0 {
 		switch message.Method {
 		case "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "item/tool/requestUserInput":
-			c.requests = append(c.requests, &approval{id: message.ID, method: message.Method, params: message.Params, answers: make(map[string]string)})
+			r := &approval{id: message.ID, method: message.Method, params: message.Params}
+			if message.Method == "item/tool/requestUserInput" {
+				questions := &userInputRequest{ref: previewID("question", string(message.ID))}
+				if err := json.Unmarshal(message.Params, questions); err != nil || len(questions.Questions) == 0 {
+					_ = a.client.reply(message.ID, nil, &rpcError{Code: -32602, Message: "Invalid user input questions"})
+					return
+				}
+				for index := range questions.Questions {
+					questions.Questions[index].selected = -1
+				}
+				r.questions = questions
+			}
+			c.requests = append(c.requests, r)
 		default:
 			_ = a.client.reply(message.ID, nil, &rpcError{Code: -32601, Message: "Pencode does not implement " + message.Method})
 			a.status = "暂不支持 Codex 请求：" + message.Method
@@ -1213,23 +1237,20 @@ func (a *agent) answer(c *conversation, id, decision string) error {
 		var result any
 		switch r.method {
 		case "item/tool/requestUserInput":
-			answers := make(map[string]any, len(r.answers))
-			var params struct {
-				Questions []struct {
-					ID string `json:"id"`
-				} `json:"questions"`
-			}
-			if err := json.Unmarshal(r.params, &params); err != nil {
-				return err
-			}
-			for _, q := range params.Questions {
-				text := strings.TrimSpace(r.answers[q.ID])
-				if text == "" {
-					return fmt.Errorf("请回答所有问题")
+			answers := make(map[string]userInputAnswer, len(r.questions.Questions))
+			if decision != "skip" {
+				for index := range r.questions.Questions {
+					q := &r.questions.Questions[index]
+					text := q.value()
+					if text == "" {
+						return fmt.Errorf("请回答所有问题")
+					}
+					answers[q.ID] = userInputAnswer{Answers: []string{text}}
 				}
-				answers[q.ID] = map[string]any{"answers": []string{text}}
 			}
-			result = map[string]any{"answers": answers}
+			result = struct {
+				Answers map[string]userInputAnswer `json:"answers"`
+			}{answers}
 		case "item/permissions/requestApproval":
 			var params struct {
 				Permissions json.RawMessage `json:"permissions"`

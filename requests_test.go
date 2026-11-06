@@ -52,7 +52,7 @@ func TestServerRequestsKeepWireIDsAndScopePermissions(t *testing.T) {
 	if err := a.answer(c, "4", "answer"); err == nil || output.Len() != 0 {
 		t.Fatal("empty answer was submitted")
 	}
-	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "input", Ref: "answer/4/choice", Value: "A"}}}); err != nil {
+	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "click", Ref: c.requests[0].questions.ref + "/0/select/0"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.answer(c, "4", "answer"); err != nil {
