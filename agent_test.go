@@ -322,6 +322,23 @@ func fixtureServer() {
 				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "fixture failure"}})
 				continue
 			}
+			if os.Getenv("PENCODE_CODEX_ASYNC_QUESTION") == "1" {
+				turnID := "async-question-turn"
+				if text != "你 ask 工具问我一个问题" {
+					turnID = "async-answer-turn"
+				}
+				response(map[string]any{"turn": map[string]string{"id": turnID, "status": "inProgress"}})
+				notify("turn/started", map[string]any{"threadId": active, "turn": map[string]string{"id": turnID, "status": "inProgress"}})
+				notify("item/completed", map[string]any{"threadId": active, "item": threadItem{ID: turnID + "-user", Type: "userMessage", Content: p.Input}})
+				item := threadItem{ID: "async-answer", Type: "agentMessage", Text: "收到回答：" + text}
+				if text == "你 ask 工具问我一个问题" {
+					item.ID, item.Text = "ask-call", "你接下来想让我帮你做什么？\n- 检查现有代码\n- 实现一个功能"
+					item.Questions = []asyncQuestion{{Title: "你接下来想让我帮你做什么？", Options: []string{"检查现有代码", "实现一个功能"}}}
+				}
+				notify("item/completed", map[string]any{"threadId": active, "item": item})
+				notify("turn/completed", map[string]any{"threadId": active, "turn": map[string]string{"id": turnID, "status": "completed"}})
+				continue
+			}
 			response(map[string]any{"turn": map[string]string{"id": "turn1", "status": "inProgress"}})
 			notify("turn/started", map[string]any{"threadId": active, "turn": map[string]string{"id": "turn1", "status": "inProgress"}})
 			notify("item/completed", map[string]any{"threadId": active, "item": map[string]any{"id": "user", "type": "userMessage", "content": p.Input}})

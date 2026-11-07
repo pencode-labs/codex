@@ -22,12 +22,19 @@ func TestLiveQuestionToolInDefaultMode(t *testing.T) {
 		if resume {
 			name = "resume"
 		}
-		t.Run(name, func(t *testing.T) { testLiveQuestionTool(t, resume) })
+		t.Run(name, func(t *testing.T) { testLiveQuestionTool(t, resume, false) })
 	}
+	t.Run("async", func(t *testing.T) { testLiveQuestionTool(t, false, true) })
 }
 
-func testLiveQuestionTool(t *testing.T, resume bool) {
+func testLiveQuestionTool(t *testing.T, resume, async bool) {
 	liveCodexHome(t)
+	toolName := "request_user_input"
+	arguments := `{"questions":[{"id":"goal","header":"工作方向","question":"你希望我接下来协助你做什么？","options":[{"label":"审查现有代码","description":"检查问题"},{"label":"实现一个新功能","description":"开发需求"}],"isOther":true}]}`
+	if async {
+		toolName = "request_user_input_async"
+		arguments = `{"questions":[{"title":"你希望我接下来协助你做什么？","options":["审查现有代码","实现一个新功能"]}]}`
+	}
 	available := make(chan bool, 4)
 	answers := make(chan string, 4)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,10 +46,11 @@ func testLiveQuestionTool(t *testing.T, resume bool) {
 			Generate *bool           `json:"generate"`
 			Tools    json.RawMessage `json:"tools"`
 			Input    []struct {
-				Type   string          `json:"type"`
-				Role   string          `json:"role"`
-				Output string          `json:"output"`
-				Tools  json.RawMessage `json:"tools"`
+				Type    string          `json:"type"`
+				Role    string          `json:"role"`
+				Output  string          `json:"output"`
+				Tools   json.RawMessage `json:"tools"`
+				Content json.RawMessage `json:"content"`
 			} `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -65,10 +73,16 @@ func testLiveQuestionTool(t *testing.T, resume bool) {
 		for index := len(request.Input) - 1; index >= 0; index-- {
 			item := request.Input[index]
 			if item.Type == "message" && item.Role == "user" {
+				if async && strings.Contains(string(item.Content), "审查现有代码") {
+					answers <- string(item.Content)
+					answered = true
+				}
 				break
 			}
 			if item.Type == "function_call_output" {
-				answers <- item.Output
+				if !async {
+					answers <- item.Output
+				}
 				answered = true
 				break
 			}
@@ -78,16 +92,16 @@ func testLiveQuestionTool(t *testing.T, resume bool) {
 			// Match the tool's own name, not mentions in another tool's description.
 			var tools any
 			_ = json.Unmarshal(request.Tools, &tools)
-			enabled := containsQuestionTool(tools)
+			enabled := containsQuestionTool(tools, toolName)
 			for _, item := range request.Input {
 				if item.Type == "additional_tools" {
 					_ = json.Unmarshal(item.Tools, &tools)
-					enabled = enabled || containsQuestionTool(tools)
+					enabled = enabled || containsQuestionTool(tools, toolName)
 				}
 			}
 			available <- enabled
 			if enabled {
-				emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]string{"type": "function_call", "id": "question-call", "call_id": "question-call", "name": "request_user_input", "arguments": `{"questions":[{"id":"goal","header":"工作方向","question":"你希望我接下来协助你做什么？","options":[{"label":"审查现有代码","description":"检查问题"},{"label":"实现一个新功能","description":"开发需求"}],"isOther":true}]}`}})
+				emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]string{"type": "function_call", "id": "question-call", "call_id": "question-call", "name": toolName, "arguments": arguments}})
 			} else {
 				text = "Question tool unavailable"
 			}
@@ -188,13 +202,16 @@ func testLiveQuestionTool(t *testing.T, resume bool) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("local provider was not reached")
 	}
-	wait(t, func() bool { return len(c.requests) > 0 })
+	wait(t, func() bool { return c.question("") != nil })
+	if async {
+		wait(t, func() bool { return !c.busy })
+	}
 	view := a.composerView()
 	validateBindings(t, view)
 	if !strings.Contains(view.HTML, `class="codex-question-card"`) || strings.Index(view.HTML, "你希望我接下来协助你做什么？") < strings.Index(view.HTML, `<section class="codex-composer">`) {
 		t.Fatal("real question tool did not show a card above the composer", view.HTML)
 	}
-	ref := c.requests[0].questions.ref + "/0/"
+	ref := c.question("").ref + "/0/"
 	questionEvent(t, a, ref+"select/0", "click", "")
 	questionEvent(t, a, ref+"next", "click", "")
 	wait(t, func() bool { return !c.busy })
@@ -206,25 +223,25 @@ func testLiveQuestionTool(t *testing.T, resume bool) {
 	default:
 		t.Fatal("model did not receive a question answer")
 	}
-	if len(c.requests) != 0 || !strings.Contains(a.composerView().HTML, "Question answered") {
+	if c.question("") != nil || !strings.Contains(a.composerView().HTML, "Question answered") {
 		t.Fatal("question did not resolve and resume the assistant")
 	}
 }
 
-func containsQuestionTool(value any) bool {
+func containsQuestionTool(value any, name string) bool {
 	switch value := value.(type) {
 	case map[string]any:
-		if value["name"] == "request_user_input" {
+		if value["name"] == name {
 			return true
 		}
 		for _, child := range value {
-			if containsQuestionTool(child) {
+			if containsQuestionTool(child, name) {
 				return true
 			}
 		}
 	case []any:
 		for _, child := range value {
-			if containsQuestionTool(child) {
+			if containsQuestionTool(child, name) {
 				return true
 			}
 		}

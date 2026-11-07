@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"html"
 	"strconv"
 	"strings"
@@ -28,6 +30,119 @@ type userInputRequest struct {
 	ref       string
 	Questions []userInputQuestion `json:"questions"`
 	current   int
+	answered  bool
+}
+
+// ask/request_user_input_async emits an agentMessage, not a JSON-RPC request.
+type asyncQuestion struct {
+	Title   string   `json:"title"`
+	Options []string `json:"options"`
+}
+
+func newAsyncQuestions(id string, questions []asyncQuestion) *userInputRequest {
+	p := &userInputRequest{ref: previewID("question", id), Questions: make([]userInputQuestion, len(questions))}
+	for index, question := range questions {
+		q := &p.Questions[index]
+		q.Question, q.IsOther, q.selected = question.Title, true, -1
+		q.Options = make([]userInputOption, len(question.Options))
+		for index, label := range question.Options {
+			q.Options[index].Label = label
+		}
+	}
+	return p
+}
+
+func (c *conversation) question(ref string) *userInputRequest {
+	for _, r := range c.requests {
+		if q := r.questions; q != nil && (ref == "" || q.ref == ref) {
+			return q
+		}
+	}
+	for _, item := range c.items {
+		if q := item.questions; q != nil && !q.answered && (ref == "" || q.ref == ref) {
+			return q
+		}
+	}
+	return nil
+}
+
+// Async answers are normal user messages. History before a later user message
+// must not reopen old questions when a conversation is resumed or paged.
+func (c *conversation) resolvePastQuestions() {
+	answered := false
+	for index := len(c.items) - 1; index >= 0; index-- {
+		item := c.items[index]
+		if item.data.Type == "userMessage" {
+			answered = true
+		} else if answered && item.questions != nil && !item.questions.answered {
+			item.questions.answered = true
+			item.html = ""
+		}
+	}
+}
+
+func (a *agent) answerQuestion(c *conversation, p *userInputRequest, decision string) error {
+	for _, r := range c.requests {
+		if r.questions == p {
+			return a.answer(c, string(r.id), decision)
+		}
+	}
+	if decision != "skip" {
+		if c.observing {
+			return fmt.Errorf("任务由其他客户端执行，请在原客户端回答")
+		}
+		var b strings.Builder
+		for index := range p.Questions {
+			q := &p.Questions[index]
+			if q.value() == "" {
+				return fmt.Errorf("请回答所有问题")
+			}
+			if index > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(q.Question)
+			b.WriteByte('\n')
+			b.WriteString(q.value())
+		}
+		if err := a.connect(); err != nil {
+			return err
+		}
+		if !c.loaded {
+			if err := a.resume(c.ID); err != nil {
+				return err
+			}
+			if !c.loaded {
+				return fmt.Errorf("%s", c.status)
+			}
+		}
+		inputs := []input{{Type: "text", Text: b.String()}}
+		if c.busy {
+			_, err := call[json.RawMessage](a.client, "turn/steer", struct {
+				ThreadID       string  `json:"threadId"`
+				ExpectedTurnID string  `json:"expectedTurnId"`
+				Input          []input `json:"input"`
+			}{c.ID, c.turnID, inputs})
+			if err != nil && c.busy {
+				return err
+			}
+			if err == nil {
+				p.answered = true
+			}
+		}
+		if !p.answered {
+			if err := a.startTurn(c, inputs); err != nil {
+				return err
+			}
+		}
+	}
+	p.answered, c.dirty = true, true
+	for _, item := range c.items {
+		if item.questions == p {
+			item.html = ""
+			break
+		}
+	}
+	return nil
 }
 
 type userInputAnswer struct {
@@ -63,11 +178,7 @@ func (a *agent) handleQuestionEvent(e peb.EditorEvent) (bool, error) {
 	if err != nil {
 		return true, nil
 	}
-	for _, r := range c.requests {
-		p := r.questions
-		if p == nil || p.ref != ref || p.current != n {
-			continue
-		}
+	if p := c.question(ref); p != nil && p.current == n {
 		q := &p.Questions[n]
 		switch {
 		case e.Kind == "input" && action == "input" && q.allowsText():
@@ -82,7 +193,7 @@ func (a *agent) handleQuestionEvent(e peb.EditorEvent) (bool, error) {
 				c.dirty = true
 			}
 		case e.Kind == "click" && (action == "skip" || action == "close"):
-			return true, a.answer(c, string(r.id), "skip")
+			return true, a.answerQuestion(c, p, "skip")
 		case e.Kind == "click" && action == "back" && n > 0:
 			p.current--
 			c.dirty = true
@@ -94,7 +205,7 @@ func (a *agent) handleQuestionEvent(e peb.EditorEvent) (bool, error) {
 				p.current++
 				c.dirty = true
 			} else {
-				return true, a.answer(c, string(r.id), "answer")
+				return true, a.answerQuestion(c, p, "answer")
 			}
 		}
 		return true, nil

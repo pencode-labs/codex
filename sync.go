@@ -193,6 +193,7 @@ func (a *agent) reconcileObserved(c *conversation, turns []turn) {
 		}
 	}
 	c.items = append(old[:prefix], updated...)
+	c.resolvePastQuestions()
 	changed := latest.ID != c.observedTurn || latest.Status != c.observedStatus
 	if changed && latest.Status == "completed" && c.observedTurn != "" && (c != a.selected || !a.workspaceOpen || a.workspaceHidden) {
 		c.unread, a.historyDirty = true, true

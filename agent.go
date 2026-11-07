@@ -56,6 +56,7 @@ type threadItem struct {
 	Changes          []change        `json:"changes"`
 	Summary          []string        `json:"summary"`
 	Content          []input         `json:"content"`
+	Questions        []asyncQuestion `json:"questions"`
 	StartedAtMs      int64           `json:"startedAtMs"`
 }
 type turn struct {
@@ -80,6 +81,7 @@ type chatItem struct {
 	sentAt        time.Time
 	progress      *turnProgress
 	files         *turnFiles
+	questions     *userInputRequest
 	html          string
 	detailRef     string
 	groupRef      string
@@ -116,6 +118,7 @@ type conversation struct {
 	context                      peb.ActionContext
 	turnRevision                 uint64
 	editRevision                 uint64
+	viewed                       uint64
 	observedDigest               [32]byte
 	unread                       bool
 	observing                    bool
@@ -175,6 +178,7 @@ type agent struct {
 	pending                                    [64]command
 	completion                                 composerCompletion
 	pendingHead, pendingCount                  int
+	conversationClock                          uint64
 	permissionIndex                            int
 	modelSettings                              bool
 	workspaceHidden                            bool
@@ -320,15 +324,24 @@ func (a *agent) dirty() bool {
 func (a *agent) selectConversation(c *conversation) {
 	a.dismissCompletion()
 	a.completion.dismissed = ""
+	if a.selected != c {
+		a.composerPrefix, a.composerBindings = "", nil
+	}
 	a.selected = c
+	if c != nil {
+		a.conversationClock++
+		c.viewed = a.conversationClock
+	}
 	a.markViewed(c)
 	a.workspaceDirty = true
+	a.trimConversations()
 }
 
 func (a *agent) closeWorkspace() error {
 	a.completion = composerCompletion{}
 	a.workspaceOpen, a.revealWorkspace = false, false
 	a.composerPrefix, a.composerBindings = "", nil
+	a.trimConversations()
 	return a.closeComposerMenus()
 }
 
@@ -779,7 +792,10 @@ func (a *agent) startTurn(c *conversation, inputs []input) error {
 	if c.files != nil && c.files.id == "" {
 		c.files.id, c.files.ref = result.Turn.ID, "changes/"+result.Turn.ID
 	}
-	a.setBusy(c, c.busy && result.Turn.Status == "inProgress")
+	// Completion of the previous turn can arrive while this start is pending.
+	// Only completion belonging to the returned turn may clear its busy state.
+	progress := c.turnProgress(result.Turn.ID)
+	a.setBusy(c, result.Turn.Status == "inProgress" && (progress == nil || !progress.complete))
 	if c.busy {
 		c.turnID = result.Turn.ID
 		c.startProgress(result.Turn, time.Now())
@@ -1000,6 +1016,7 @@ func (a *agent) readHistory(c *conversation) error {
 		files.complete = files.complete || t.Status != "inProgress"
 	}
 	c.items = append(older, c.items...)
+	c.resolvePastQuestions()
 	if c.editing != nil {
 		for _, i := range c.items {
 			if i.data.ID == c.editing.data.ID {
@@ -1022,6 +1039,9 @@ func newChatItem(item threadItem, complete bool) *chatItem {
 func (i *chatItem) replace(item threadItem, complete bool) {
 	sameImage := item.Type == "imageView" && i.data.Type == "imageView" && item.Path == i.data.Path
 	i.data, i.complete = item, complete
+	if i.questions == nil && item.Type == "agentMessage" && len(item.Questions) > 0 {
+		i.questions = newAsyncQuestions(item.ID, item.Questions)
+	}
 	i.html = ""
 	if item.StartedAtMs > 0 {
 		i.sentAt = time.UnixMilli(item.StartedAtMs)
@@ -1055,6 +1075,7 @@ func (i *chatItem) replace(item threadItem, complete bool) {
 	i.data.Content = nil
 	i.data.Summary = nil
 	i.data.AggregatedOutput = ""
+	i.data.Questions = nil
 }
 
 func appendText(b *strings.Builder, text string) {
@@ -1162,6 +1183,9 @@ func (a *agent) onMessage(message envelope) {
 			i.files.add(event.Item)
 		}
 		i.replace(event.Item, message.Method == "item/completed")
+		if event.Item.Type == "userMessage" {
+			c.resolvePastQuestions()
+		}
 		if event.StartedAtMs > 0 {
 			i.sentAt = time.UnixMilli(event.StartedAtMs)
 		}
@@ -1224,6 +1248,9 @@ func (a *agent) onMessage(message envelope) {
 		return
 	}
 	c.dirty = true
+	if message.Method == "turn/completed" {
+		a.trimConversations()
+	}
 }
 
 func (a *agent) answer(c *conversation, id, decision string) error {

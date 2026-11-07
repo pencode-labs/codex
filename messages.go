@@ -72,7 +72,9 @@ func (i *chatItem) renderMessageActions(b *strings.Builder) {
 		b.WriteString(html.EscapeString(i.data.ID))
 		b.WriteString(`" data-pencode-copy="`)
 		b.WriteString(html.EscapeString(i.text.String()))
-		b.WriteString(`" title="复制消息" aria-label="复制消息"><img src="resources/icons/copy.svg" alt=""></button>`)
+		b.WriteString(`" title="复制消息" aria-label="复制消息"><img data-pencode-icon="copy" data-ref="copy-message-icon/`)
+		b.WriteString(html.EscapeString(i.data.ID))
+		b.WriteString(`" src="resources/icons/copy.svg" alt=""></button>`)
 		if i.files != nil && i.files.id != "" {
 			ref := "edit-message/" + i.data.ID
 			b.WriteString(`<button type="button" class="codex-icon-button codex-message-edit" data-ref="`)

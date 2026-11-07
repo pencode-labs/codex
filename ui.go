@@ -72,6 +72,7 @@ func (a *agent) flush() {
 
 func (a *agent) composerView() *peb.EditorView {
 	var b strings.Builder
+	b.Grow(len(a.composerPrefix) + len(a.history.Data)*1024 + 4096)
 	bindings := make([]peb.EditorBinding, 0, 16)
 	b.WriteString(`<main class="codex-workspace" data-pencode-layout="fill"><section class="codex-chat-pane"><div class="codex-transcript" data-ref="transcript" data-pencode-selectable data-pencode-scroll="end" data-pencode-scroll-key="`)
 	if a.selected != nil {
@@ -101,11 +102,8 @@ func (a *agent) composerView() *peb.EditorView {
 	}
 	b.WriteString(`<section class="codex-composer">`)
 	if a.selected != nil {
-		for _, r := range a.selected.requests {
-			if r.questions != nil {
-				bindings = r.questions.render(&b, bindings)
-				break
-			}
+		if q := a.selected.question(""); q != nil {
+			bindings = q.render(&b, bindings)
 		}
 	}
 	if busy && a.selected.files != nil && !a.selected.files.complete {
@@ -220,7 +218,7 @@ func (a *agent) composerView() *peb.EditorView {
 	bindings = append(bindings, peb.EditorBinding{Ref: "new", Kind: "click"}, peb.EditorBinding{Ref: "refresh-history", Kind: "click"})
 	a.composerPrefix = b.String()
 	a.composerBindings = bindings
-	return a.historyView()
+	return a.appendHistoryView(&b, bindings)
 }
 
 func (a *agent) historyView() *peb.EditorView {
@@ -228,6 +226,10 @@ func (a *agent) historyView() *peb.EditorView {
 	b.WriteString(a.composerPrefix)
 	bindings := make([]peb.EditorBinding, len(a.composerBindings), len(a.composerBindings)+2*len(a.history.Data)+1)
 	copy(bindings, a.composerBindings)
+	return a.appendHistoryView(&b, bindings)
+}
+
+func (a *agent) appendHistoryView(b *strings.Builder, bindings []peb.EditorBinding) *peb.EditorView {
 	b.WriteString(`<div class="codex-history-header" data-ref="history-header" data-pencode-region><h3>当前项目的会话</h3><button data-ref="new" class="codex-icon-button" type="button" title="新会话" aria-label="新会话"><img data-ref="new-icon" data-pencode-icon="add" alt=""></button><button data-ref="refresh-history" class="codex-icon-button" type="button"`)
 	if a.historyLoading {
 		b.WriteString(` disabled aria-busy="true" title="正在加载会话" aria-label="正在加载会话"><img class="codex-history-spinning"`)
@@ -362,6 +364,9 @@ func (c *conversation) render(b *strings.Builder, bindings []peb.EditorBinding, 
 		start--
 	}
 	if start > 0 {
+		// Keep one boundary item warm so a streaming update does not repeatedly
+		// render the same large message just outside the visible byte budget.
+		c.releasePaintBefore(start - 1)
 		b.WriteString(`<p class="codex-muted">较早输出已折叠，完整记录保存在 Codex 会话中。</p>`)
 	}
 	var progress *turnProgress
@@ -478,6 +483,9 @@ func (c *conversation) renderItems(b *strings.Builder, bindings []peb.EditorBind
 
 func (i *chatItem) render(b *strings.Builder, root, scope string) {
 	i.linkBindings = nil
+	if i.questions != nil && !i.questions.answered {
+		return
+	}
 	label, icon := "", "wrench"
 	class := "codex-message"
 	switch i.data.Type {
