@@ -17,6 +17,7 @@ func TestResolveExecutablePath(t *testing.T) {
 	homeVariable := "HOME"
 	if runtime.GOOS == "windows" {
 		homeVariable = "USERPROFILE"
+		t.Setenv("LOCALAPPDATA", t.TempDir())
 	}
 	t.Setenv(homeVariable, home)
 	t.Setenv("PENCODE_CODEX_PATH", "")

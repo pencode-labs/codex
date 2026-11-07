@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,9 @@ import (
 )
 
 func fixtureDaemonStart() error {
+	if message := os.Getenv("PENCODE_CODEX_DAEMON_ERROR"); message != "" {
+		return fmt.Errorf("%s", message)
+	}
 	socket := os.Getenv("PENCODE_CODEX_DAEMON_SOCKET")
 	endpoint, err := defaultServerURL("")
 	if err != nil {
@@ -42,6 +47,30 @@ func fixtureDaemonStart() error {
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(map[string]string{"socketPath": socket})
+}
+
+func fixtureLocalServer() error {
+	if message := os.Getenv("PENCODE_CODEX_LISTEN_ERROR"); message != "" {
+		return fmt.Errorf("%s", message)
+	}
+	socket := strings.TrimPrefix(os.Args[3], "unix://")
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		return err
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	if err := os.WriteFile(os.Getenv("PENCODE_CODEX_LISTEN_PID"), []byte(fmt.Sprint(os.Getpid())), 0o600); err != nil {
+		return err
+	}
+	target, err := url.Parse(os.Getenv("PENCODE_CODEX_PROXY_URL"))
+	if err != nil {
+		return err
+	}
+	target.Scheme = "http"
+	return http.Serve(listener, httputil.NewSingleHostReverseProxy(target))
 }
 
 // Existing protocol fixtures run behind a real WebSocket handshake and framing.

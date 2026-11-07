@@ -27,6 +27,11 @@ func TestMain(m *testing.M) {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(2)
 			}
+		} else if len(os.Args) == 4 && os.Args[2] == "--listen" {
+			if err := fixtureLocalServer(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
 		} else if len(os.Args) > 2 && os.Args[2] == "proxy" {
 			if err := fixtureProxy(); err != nil {
 				fmt.Fprintln(os.Stderr, err)

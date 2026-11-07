@@ -265,10 +265,16 @@ func proxySocket(ctx context.Context, root, path, endpoint string) (string, erro
 		}
 		codexLog.Printf("默认 app-server 不可用，启动共享 daemon: %v", err)
 		cmd := codexCommand(ctx, root, path, "app-server", "daemon", "start")
+		var diagnostic proxyStderr
+		cmd.Stderr = io.MultiWriter(stderrWriter, &diagnostic)
 		started := time.Now()
 		output, err := cmd.Output()
 		if err != nil {
-			return "", fmt.Errorf("启动 Codex 共享服务（%s app-server daemon start）：%w", path, err)
+			message := strings.TrimSpace(string(diagnostic.data[:diagnostic.n]))
+			if strings.Contains(message, "this CLI has no complete local package") {
+				return startLocalServer(ctx, root, path, endpoint)
+			}
+			return "", fmt.Errorf("启动 Codex 共享服务（%s app-server daemon start）：%w；%s", path, err, message)
 		}
 		var daemon struct {
 			SocketPath string `json:"socketPath"`

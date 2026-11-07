@@ -34,7 +34,7 @@ func serveAgent(input io.Reader, output io.Writer) error {
 		Settings: []peb.Setting{{ID: "executablePath", Label: "Codex 可执行文件路径", Type: peb.SettingString, Default: json.RawMessage(`""`),
 			Description: "填写 Codex 可执行文件或其所在目录，留空自动查找。用于启动连接代理及缺失的共享服务，修改后下次连接生效。"},
 			{ID: "serverURL", Label: "Codex 共享服务地址", Type: peb.SettingString, Default: json.RawMessage(`""`),
-				Description: "留空通过独立 proxy 复用本机 Codex 服务，不存在时启动共享 daemon。unix:// 地址通过 proxy 连接，ws://、wss:// 地址直接连接。修改后下次连接生效。"}},
+				Description: "留空通过独立 proxy 复用本机 Codex 服务，不存在时自动启动共享服务。unix:// 地址通过 proxy 连接，ws://、wss:// 地址直接连接。修改后下次连接生效。"}},
 		Actions: []peb.Action{{ID: "chat", Tooltip: "Codex Agent", Icon: "resources/icons/chatgpt.svg", Location: peb.StatusBar}},
 	}, peb.Handlers{
 		Settings:  app.configure,

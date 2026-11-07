@@ -1,6 +1,6 @@
 # Codex Agent
 
-Pencode 的 Codex 扩展，通过自行启动的 `codex app-server proxy` 连接共享 app-server。proxy 的 stdin/stdout 转发原始 socket 字节，扩展在管道上完成 WebSocket 握手并收发 JSON-RPC；proxy 不转换 JSONL。默认复用已有服务，没有服务时才由 `codex app-server daemon start` 启动共享服务，工作区内各项目和会话共用一个后台连接及 proxy。
+Pencode 的 Codex 扩展，通过自行启动的 `codex app-server proxy` 连接共享 app-server。proxy 的 stdin/stdout 转发原始 socket 字节，扩展在管道上完成 WebSocket 握手并收发 JSON-RPC；proxy 不转换 JSONL。默认复用已有服务，没有服务时自动启动共享服务；CLI 缺少完整安装包而无法启动 daemon 时，直接运行 `codex app-server --listen unix://<默认 socket 路径>`，无需另装 CLI。工作区内各项目和会话共用一个后台连接及 proxy。
 
 - 状态栏底部的 **ChatGPT 图标按钮**（悬停显示 Codex Agent）打开或切回编辑器区域的聊天标签页；通过标签页的关闭按钮关闭后，可再次点击图标打开。
 - 聊天标签页分为左右两栏：左侧显示当前聊天记录，输入框固定在聊天记录下方；右侧显示历史会话列表。发送消息或恢复会话后，标签标题跟随当前聊天标题。
@@ -67,11 +67,11 @@ Windows 单独构建时使用 `go build -o bin/codex-agent.exe .`。如需从扩
 
 在 IDE **设置 → Codex Agent → Codex 可执行文件路径** 中指定原生 Codex 可执行文件或其所在目录；填写目录时使用其中的 `codex.exe`（Windows）或 `codex`（macOS/Linux），目录中没有该程序时提示具体错误。支持 Windows 路径（如 `C:\Program Files\Codex\codex.exe` 或 `C:/Tools/codex.exe`）、macOS/Linux 路径（如 `/usr/local/bin/codex`）、用户目录（如 `~/.local/bin/codex`，Windows 也支持 `~\bin\codex.exe`）以及相对于项目目录的路径（如 `./tools/codex`）。路径包含空格时无需添加引号；只填写命令名时从 `PATH` 查找。
 
-此设置优先于环境变量 `PENCODE_CODEX_PATH`；留空时先使用该环境变量，再从 `PATH` 查找 `codex`。macOS 从 Finder 或 Dock 启动时，如果 GUI 进程没有继承 `.zprofile` / `.zshrc` 中的路径，扩展会再通过登录交互式 shell 读取 `PATH`，并用得到的环境启动 Codex proxy 和 daemon。仍然找不到时，可直接填写 `command -v codex` 返回的绝对路径。修改在下次连接时生效，可通过切换会话或重启扩展建立新连接；这些操作只断开当前连接，聊天任务继续运行。可执行文件不经过 shell，不接受命令字符串。远程工作区使用服务器的路径格式，进程、认证和文件操作均在服务器运行。
+此设置优先于环境变量 `PENCODE_CODEX_PATH`；两者均留空时，Windows 自动递归扫描 `%LOCALAPPDATA%\OpenAI\Codex\bin`（例如 `C:\Users\zhuoh\AppData\Local\OpenAI\Codex\bin`）及其子目录，使用找到的第一个 `codex.exe`（文件名不区分大小写）；扫描跳过无法读取的目录，不跟随目录符号链接，未找到时从 `PATH` 查找 `codex`。其他平台默认从 `PATH` 查找。macOS 从 Finder 或 Dock 启动时，如果 GUI 进程没有继承 `.zprofile` / `.zshrc` 中的路径，扩展会再通过登录交互式 shell 读取 `PATH`，并用得到的环境启动 Codex proxy 和 daemon。仍然找不到时，可直接填写 `command -v codex` 返回的绝对路径。修改在下次连接时生效，可通过切换会话或重启扩展建立新连接；这些操作只断开当前连接，聊天任务继续运行。可执行文件不经过 shell，不接受命令字符串。远程工作区使用服务器的路径格式，进程、认证和文件操作均在服务器运行。
 
-在 IDE **设置 → Codex Agent → Codex 共享服务地址** 中留空时，扩展先探测 `$CODEX_HOME/app-server-control/app-server-control.sock`（未设置 `CODEX_HOME` 时使用 `~/.codex`），支持 Codex 为较长路径创建的 socket 符号链接。已有服务时，扩展启动自己的 `codex app-server proxy --sock <路径>` 接入；其他客户端使用 `codex app-server --listen unix://` 启动的服务同样可以复用。只有 socket 不存在或连接被拒绝时，才调用 `codex app-server daemon start`，由 CLI 的单例管理处理并发启动，再启动 proxy 连接返回的 socket。认证、权限、握手失败和连接超时会直接报告，不会另起服务。重连及自动标题使用各自的 proxy 连接同一个共享服务，标题 proxy 在任务结束后回收。
+在 IDE **设置 → Codex Agent → Codex 共享服务地址** 中留空时，扩展先探测 `$CODEX_HOME/app-server-control/app-server-control.sock`（未设置 `CODEX_HOME` 时使用 `~/.codex`），支持 Codex 为较长路径创建的 socket 符号链接。已有服务时，扩展启动自己的 `codex app-server proxy --sock <路径>` 接入；其他客户端使用 `codex app-server --listen unix://` 启动的服务同样可以复用。只有 socket 不存在或连接被拒绝时，才调用 `codex app-server daemon start`。若 CLI 明确报告缺少完整本地安装包（桌面应用自带 CLI 可能出现），扩展会直接以默认 socket 路径启动后台 app-server，并等待最多 15 秒；Windows 隐藏窗口，服务不随连接或扩展退出。CLI 的 socket 启动锁处理跨进程并发，后续连接复用同一 socket。直接启动的服务将 stderr 写入 `$CODEX_HOME/pencode-app-server.log`，PID 记录在扩展诊断日志中；启动失败或取消时终止并回收本次启动的子进程。其他 daemon 错误及认证、权限、握手失败和连接超时会直接报告。重连及自动标题使用各自的 proxy 连接同一个共享服务，标题 proxy 在任务结束后回收。
 
-关闭标签页时保留后台连接和 proxy，以继续接收运行状态；连接释放或退出扩展时，会关闭管道并终止、回收扩展自己启动的 proxy，不会停止共享服务。其他程序持有自己的 proxy 或连接。相同用户及 `CODEX_HOME` 共用一个服务，daemon 在客户端退出后继续运行属于其设计；需要停止时由服务管理方执行 `codex app-server daemon stop`。扩展不按 PID 查找或终止共享服务，也不扫描其他用户的服务。
+关闭标签页时保留后台连接和 proxy，以继续接收运行状态；连接释放或退出扩展时，会关闭管道并终止、回收扩展自己启动的 proxy，不会停止共享服务。其他程序持有自己的 proxy 或连接。相同用户及 `CODEX_HOME` 共用一个服务，服务在客户端退出后继续运行；受管 daemon 可由服务管理方执行 `codex app-server daemon stop` 停止，直接启动的 app-server 则按诊断日志中的 PID 手动停止。扩展不按 PID 查找或终止已有共享服务，也不扫描其他用户的服务。
 
 也可以自行启动服务，无需使用 daemon 子命令：
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,11 @@ func resolveExecutablePath(root, path string) (string, error) {
 		path = strings.TrimSpace(os.Getenv("PENCODE_CODEX_PATH"))
 	}
 	if path == "" {
+		if runtime.GOOS == "windows" {
+			if executable := windowsCodexExecutable(); executable != "" {
+				return executable, nil
+			}
+		}
 		path = "codex"
 	}
 	path = filepath.FromSlash(path)
@@ -61,6 +67,22 @@ func resolveExecutablePath(root, path string) (string, error) {
 		return executable, nil
 	}
 	return path, nil
+}
+
+func windowsCodexExecutable() string {
+	directory := os.Getenv("LOCALAPPDATA")
+	if directory == "" {
+		return ""
+	}
+	var executable string
+	filepath.WalkDir(filepath.Join(directory, "OpenAI", "Codex", "bin"), func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() && strings.EqualFold(entry.Name(), "codex.exe") {
+			executable = path
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return executable
 }
 
 const (
