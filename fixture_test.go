@@ -57,6 +57,8 @@ func fixtureLocalServer() error {
 	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
 		return err
 	}
+	// The CLI replaces a stale socket before binding its listener.
+	_ = os.Remove(socket)
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		return err

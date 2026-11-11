@@ -56,7 +56,7 @@ func startLocalServer(ctx context.Context, root, path, endpoint string) (string,
 	cmd := codexCommand(context.Background(), root, path, "app-server", "--listen", endpoint)
 	detachServer(cmd)
 	cmd.Stderr = log
-	if err := cmd.Start(); err != nil {
+	if err := startCodexCommand(cmd); err != nil {
 		return "", fmt.Errorf("启动 Codex 共享服务（%s app-server --listen %s）：%w", path, endpoint, err)
 	}
 	codexLog.Printf("直接启动共享 app-server: pid=%d endpoint=%q", cmd.Process.Pid, endpoint)

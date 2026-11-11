@@ -10,6 +10,7 @@ import (
 )
 
 type changedFile struct {
+	preview        *peb.UI
 	path           string
 	diffs          []fileDiff
 	added, removed int
@@ -96,6 +97,7 @@ func (f *turnFiles) add(item threadItem) {
 			f.files = append(f.files, changedFile{path: path})
 		}
 		file := &f.files[index]
+		file.preview = nil
 		added, removed := edit.lineCounts()
 		file.added += added
 		file.removed += removed
@@ -118,13 +120,10 @@ func (f *turnFiles) prepareLive() {
 	b.WriteString(` 个文件已更改`)
 	renderChangeCounts(&b, f.added, f.removed)
 	b.WriteString(`</button><div class="codex-live-changes-popover"><div id="pencode-extension-codex-live-changes-list" class="codex-live-changes-list" role="list" aria-label="本轮已更改的文件">`)
-	diffBudget := 32 << 10
 	for index, file := range f.files {
-		ref := "change-file/" + f.id + "/" + strconv.Itoa(index)
+		ref := "change-preview/" + f.id + "/" + strconv.Itoa(index)
 		b.WriteString(`<div role="listitem"><button type="button" class="codex-live-change" data-ref="`)
 		b.WriteString(html.EscapeString(ref))
-		b.WriteString(`" aria-expanded="`)
-		b.WriteString(strconv.FormatBool(file.expanded))
 		b.WriteString(`"><span class="codex-change-path" title="`)
 		b.WriteString(html.EscapeString(file.path))
 		b.WriteString(`">`)
@@ -132,13 +131,48 @@ func (f *turnFiles) prepareLive() {
 		b.WriteString(`</span>`)
 		renderChangeCounts(&b, file.added, file.removed)
 		b.WriteString(`</button></div>`)
-		if file.expanded {
-			renderFileDiffs(&b, file, &diffBudget)
-		}
 		f.liveBindings = append(f.liveBindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 	}
 	b.WriteString(`</div></div></div></div>`)
 	f.liveHTML = b.String()
+}
+
+func (a *agent) openChangePreview(ref string) error {
+	separator := strings.LastIndexByte(ref, '/')
+	if separator < 0 || a.selected == nil {
+		return nil
+	}
+	index, err := strconv.Atoi(ref[separator+1:])
+	f := a.selected.turnFiles(ref[:separator])
+	if err != nil || f == nil || index < 0 || index >= len(f.files) {
+		return nil
+	}
+	file := &f.files[index]
+	if file.preview == nil {
+		var b strings.Builder
+		b.WriteString(`<section class="codex-change-preview" data-ref="change-preview" data-pencode-selectable data-pencode-searchable><header><h2>`)
+		b.WriteString(html.EscapeString(filepath.Base(file.path)))
+		b.WriteString(`</h2>`)
+		renderChangeCounts(&b, file.added, file.removed)
+		b.WriteString(`</header><p class="codex-muted">`)
+		b.WriteString(html.EscapeString(file.path))
+		b.WriteString(`</p>`)
+		budget := 32 << 10
+		renderFileDiffs(&b, *file, &budget)
+		b.WriteString(`</section>`)
+		file.preview = &peb.UI{
+			ID: previewID("change", f.root+"/"+a.selected.ID+"/"+ref), Title: filepath.Base(file.path) + " · 差异预览",
+			Kind: peb.EditorTab, Context: a.selected.context,
+			View: &peb.EditorView{HTML: b.String(), CSS: chatCSS},
+		}
+	}
+	if err := a.publisher.Show(*file.preview); err != nil {
+		return err
+	}
+	// A view update preserves selection; explicitly reveal a reused preview tab.
+	ui := *file.preview
+	ui.View = nil
+	return a.publisher.Show(ui)
 }
 
 func (f *turnFiles) prepare() {

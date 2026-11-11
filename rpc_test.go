@@ -84,7 +84,7 @@ func testSharedEndpointSelectionAndAuthentication(t *testing.T, proxy bool) {
 func unixRPCServer(t *testing.T, reject bool) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("requires Unix sockets")
+		t.Skip("requires socket symlinks")
 	}
 	// The home/control path may be longer than sockaddr_un; Codex also uses a
 	// symlink to a shorter socket in that case.

@@ -64,6 +64,9 @@ func (c *conversation) releasePaintBefore(end int) {
 		if files := item.files; files != nil && files != visible {
 			files.html, files.liveHTML = "", ""
 			files.bindings, files.liveBindings = nil, nil
+			for index := range files.files {
+				files.files[index].preview = nil
+			}
 		}
 	}
 }

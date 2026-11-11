@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,7 +91,30 @@ func localServerFixture(t *testing.T) (string, string) {
 }
 
 func TestIncompletePackageStartsSharedServer(t *testing.T) {
+	t.Run("absent", func(t *testing.T) { testIncompletePackageStartsSharedServer(t, false) })
+	t.Run("stale", func(t *testing.T) { testIncompletePackageStartsSharedServer(t, true) })
+}
+
+func testIncompletePackageStartsSharedServer(t *testing.T, stale bool) {
 	path, pidFile := localServerFixture(t)
+	if stale {
+		endpoint, err := defaultServerURL("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		socket := strings.TrimPrefix(endpoint, "unix://")
+		if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listener.SetUnlinkOnClose(false)
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var firstPID string
 	for range 2 {
 		client, err := startClient(t.Context(), t.TempDir(), path, "", nil)

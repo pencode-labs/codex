@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -188,7 +188,7 @@ func connectServer(ctx context.Context, root, path, endpoint string) (*websocket
 		_ = p.input.Close()
 		return nil, err
 	}
-	if err := p.cmd.Start(); err != nil {
+	if err := startCodexCommand(p.cmd); err != nil {
 		cancel()
 		_ = p.input.Close()
 		_ = p.output.Close()
@@ -260,15 +260,20 @@ func proxySocket(ctx context.Context, root, path, endpoint string) (string, erro
 		}
 		// Only an absent listener permits startup. The proxy reports handshake
 		// failures without starting a second server.
-		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED) {
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, connectionRefused) {
 			return "", err
 		}
 		codexLog.Printf("默认 app-server 不可用，启动共享 daemon: %v", err)
 		cmd := codexCommand(ctx, root, path, "app-server", "daemon", "start")
 		var diagnostic proxyStderr
 		cmd.Stderr = io.MultiWriter(stderrWriter, &diagnostic)
+		var output bytes.Buffer
+		cmd.Stdout = &output
 		started := time.Now()
-		output, err := cmd.Output()
+		err = startCodexCommand(cmd)
+		if err == nil {
+			err = cmd.Wait()
+		}
 		if err != nil {
 			message := strings.TrimSpace(string(diagnostic.data[:diagnostic.n]))
 			if strings.Contains(message, "this CLI has no complete local package") {
@@ -279,7 +284,7 @@ func proxySocket(ctx context.Context, root, path, endpoint string) (string, erro
 		var daemon struct {
 			SocketPath string `json:"socketPath"`
 		}
-		if err := json.Unmarshal(output, &daemon); err != nil {
+		if err := json.Unmarshal(output.Bytes(), &daemon); err != nil {
 			return "", fmt.Errorf("读取 Codex 共享服务地址：%w", err)
 		}
 		if !filepath.IsAbs(daemon.SocketPath) {
