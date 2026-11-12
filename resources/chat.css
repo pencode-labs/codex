@@ -220,9 +220,9 @@
 .codex-activity-summary[aria-expanded="true"] .codex-activity-chevron { transform: rotate(180deg); }
 .codex-activity-details { margin: 8px 0 0 6px; padding: 4px 0 4px 16px; border-left: 1px solid var(--vscode-editorGroup-border); color: var(--vscode-editor-foreground); }
 .codex-text { white-space: pre-wrap; }
-.codex-chat pre { overflow: auto; white-space: pre-wrap; padding: 12px; border-radius: 4px; background: var(--vscode-textCodeBlock-background); font-size: 12px; }
+.codex-chat pre { overflow: auto; white-space: pre-wrap; padding: 12px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000); font-size: 12px; }
 .codex-chat code { font-family: monospace; }
-.codex-chat p code, .codex-chat li code { padding: 1px 4px; border-radius: 4px; background: var(--vscode-textCodeBlock-background); }
+.codex-chat p code, .codex-chat li code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000); }
 .codex-chat table { border-collapse: collapse; width: 100%; }
 .codex-chat td, .codex-chat th { border: 1px solid var(--vscode-editorGroup-border); padding: 6px 10px; }
 .codex-chat a { color: var(--vscode-textLink-foreground); }
