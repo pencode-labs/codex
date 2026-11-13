@@ -32,7 +32,14 @@ jobs:
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
       - name: Test
-        run: go test -mod=readonly ./...
+        shell: bash
+        run: |
+          message=$(git log -1 --format=%B)
+          if [[ "$message" == *"[skip tests]"* ]]; then
+            echo 'Skipping tests as requested by the release commit.'
+            exit 0
+          fi
+          go test -mod=readonly ./...
       - name: Build extension archives
         shell: python3 {0}
         run: |
