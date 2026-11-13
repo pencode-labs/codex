@@ -3,8 +3,6 @@ name: Release extension
 on:
   push:
     tags: ['v*']
-  release:
-    types: [published]
 
 permissions:
   contents: write
@@ -14,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+  RELEASE_TAG: ${{ github.ref_name }}
   CGO_ENABLED: '0'
   GOWORK: 'off'
 
@@ -23,9 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Validate release tag
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
       - name: Test
         run: go test -mod=readonly ./...
       - name: Build extension archives
@@ -43,7 +48,9 @@ jobs:
           manifest = json.loads(Path('resources/extension.json').read_text())
           checksums = []
           for goos, goarch in itertools.product(('linux', 'darwin', 'windows'), ('amd64', 'arm64')):
-              package = Path('dist') / f"{manifest['id']}-{tag}-{goos}-{goarch}"
+              staging = Path('dist/staging')
+              shutil.rmtree(staging, ignore_errors=True)
+              package = staging / manifest['id']
               shutil.copytree('resources', package / 'resources')
               for name in ('LICENSE', 'README.md'):
                   shutil.copy2(name, package / name)
@@ -56,16 +63,20 @@ jobs:
               subprocess.run(
                   ['go', 'build', '-mod=readonly', '-trimpath', '-ldflags=-s -w', '-o', str(package / entry), '.'],
                   env=os.environ | {'GOOS': goos, 'GOARCH': goarch}, check=True)
-              archive = Path(shutil.make_archive(str(package), 'zip', package))
+              archive = Path(shutil.make_archive(
+                  str(Path('dist') / f"{manifest['id']}-{tag}-{goos}-{goarch}"),
+                  'zip', staging, manifest['id']))
               with archive.open('rb') as stream:
                   checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
               checksums.append(f'{checksum}  {archive.name}\n')
+          shutil.rmtree(staging)
           Path('dist/SHA256SUMS').write_text(''.join(checksums), encoding='utf-8')
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          (cd dist && sha256sum --check SHA256SUMS)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS --clobber
           else

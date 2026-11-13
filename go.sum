@@ -1,7 +1,7 @@
 github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
-github.com/pencode-labs/pencode v0.1.0-rc.1 h1:p2r/FN189MkcB9R92Nxm0qPzN1tlURng6HwImekJVv0=
-github.com/pencode-labs/pencode v0.1.0-rc.1/go.mod h1:7fMJQW6E2Ctqu/G/gN32TvCCFuFbNY1HkDabUOmUwfI=
+github.com/pencode-labs/pencode v0.1.0-rc.5 h1:JI+moaS/AwFqDrOCchotvE/BPmefpWO4TS+uzeqX56U=
+github.com/pencode-labs/pencode v0.1.0-rc.5/go.mod h1:SDdbSKhMoyxqNH+sCc9/zd6SHsXN+2++PUIvR9OizT4=
 github.com/yuin/goldmark/v2 v2.1.9 h1:C5AZWQOm71NKdpMapPEYEB/UIRHDiMb3h5AJRHxzkXQ=
 github.com/yuin/goldmark/v2 v2.1.9/go.mod h1:G6M4/qOFtfn01/o14BU1UR2Lo5N3S9Qo7xCuz/sHjGQ=
 golang.org/x/net v0.61.0 h1:RR+6j/BTBCrggOLugxa+66R8FvoN6MHlzDlZIbN9YFw=
