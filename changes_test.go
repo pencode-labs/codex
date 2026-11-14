@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"html"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -337,105 +338,44 @@ func changeViewForClick(t *testing.T, a *agent, ref string) *peb.EditorView {
 	return view
 }
 
-func changePreviewForClick(t *testing.T, a *agent, ref string) peb.UI {
-	t.Helper()
-	updates := make(chan peb.UI, 2)
-	previous := a.publisher
-	a.publisher = syncPublisher{updates: updates}
-	defer func() { a.publisher = previous }()
-	clickActivity(t, a, ref)
-	if len(updates) != 2 {
-		t.Fatalf("file click published %d updates, want a preview and reveal", len(updates))
-	}
-	ui, reveal := <-updates, <-updates
-	if ui.Kind != peb.EditorTab || ui.View == nil || ui.Context != a.selected.context || reveal.ID != ui.ID || reveal.View != nil {
-		t.Fatal("file click did not open and reveal an editor preview", ui, reveal)
-	}
-	validateBindings(t, ui.View)
-	if strings.Contains(a.composerView().HTML, "<pre>") {
-		t.Fatal("file click expanded a diff inside the popover")
-	}
-	return ui
-}
-
-func TestLiveFileChangesOpenEditorPreview(t *testing.T) {
+func TestLiveFileChangesUseNativeDiffLinks(t *testing.T) {
 	root := t.TempDir()
 	f := newTurnFiles(`turn/"one`, root)
-	edit := threadItem{Type: "fileChange", Status: "completed", Changes: []change{
-		{Path: "src/<file>.go", Diff: "-old\n+<new>\n"},
-		{Path: "test/<file>.go", Diff: "deleted\n"},
-	}}
-	edit.Changes[1].Kind.Type = "delete"
-	f.add(edit)
-	c := &conversation{thread: thread{ID: "thread/one"}, context: peb.ActionContext{ProjectPath: root}, files: f, busy: true}
+	external := filepath.Join(t.TempDir(), "external.go")
+	f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{
+		{Path: "src/<file & 道>.go", Diff: "-old\n+<new>\n"},
+		{Path: "test/<file & 道>.go", Diff: "deleted\n"},
+		{Path: external, Diff: "+external\n"},
+	}})
+	c := &conversation{context: peb.ActionContext{ProjectPath: root}, files: f, busy: true}
 	a := &agent{selected: c}
 	view := a.composerView()
 	validateBindings(t, view)
-	if len(f.liveBindings) != 2 || !strings.Contains(view.HTML, `<button type="button" class="codex-live-change" data-ref="change-preview/turn/&#34;one/0"><span`) {
-		t.Fatal("live file rows must have click bindings", view.HTML, f.liveBindings)
+	for index, file := range f.files {
+		name := file.path
+		if !filepath.IsAbs(name) {
+			name = filepath.Join(root, name)
+		}
+		target := url.URL{Scheme: "pencode-diff", Path: "/" + strings.TrimPrefix(filepath.ToSlash(name), "/")}
+		if !strings.Contains(view.HTML, `data-pencode-href="`+html.EscapeString(target.String())+`"`) {
+			t.Fatalf("file %d is missing its native diff target: %s", index, view.HTML)
+		}
 	}
-	first := changePreviewForClick(t, a, `change-preview/turn/"one/0`)
-	if !strings.Contains(first.View.HTML, "+&lt;new&gt;") || strings.Contains(first.View.HTML, "<new>") || !strings.Contains(first.View.HTML, html.EscapeString(f.files[0].path)) || first.Title != "<file>.go · 差异预览" {
-		t.Fatal("preview lost the file path or escaped diff", first)
+	for _, binding := range view.Events {
+		if strings.HasPrefix(binding.Ref, "change-preview/") {
+			t.Fatal("extension click binding intercepts native navigation", binding)
+		}
 	}
-	second := changePreviewForClick(t, a, `change-preview/turn/"one/1`)
-	if !strings.Contains(second.View.HTML, `class="codex-diff-removed">deleted`) || first.ID == second.ID {
-		t.Fatal("same-name files must have independent previews", second)
+	if strings.Count(view.HTML, `role="link" class="codex-live-change"`) != 3 || strings.Contains(view.HTML, "<pre>") {
+		t.Fatal("live files must remain compact native links", view.HTML)
 	}
-	if reopened := changePreviewForClick(t, a, `change-preview/turn/"one/0`); reopened.ID != first.ID || reopened.View != first.View {
-		t.Fatal("reopening a file must reuse its cached preview tab")
+	if allocations := testing.AllocsPerRun(100, f.prepareLive); allocations != 0 {
+		t.Fatalf("cached native diff links allocated %g objects", allocations)
 	}
-	f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "src/<file>.go", Diff: "+next\n"}}})
+	f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: f.files[0].path, Diff: "+next\n"}}})
 	view = a.composerView()
 	validateBindings(t, view)
-	if strings.Contains(view.HTML, "+next") || f.complete || !f.collapsed || !c.busy || len(f.liveBindings) != 2 || f.files[0].expanded || f.files[1].expanded {
-		t.Fatal("live updates must preserve the compact popover and running state", view.HTML)
-	}
-	updated := changePreviewForClick(t, a, `change-preview/turn/"one/0`)
-	if updated.ID != first.ID || updated.View == first.View || !strings.Contains(updated.View.HTML, "+next") || !strings.Contains(updated.View.HTML, "+&lt;new&gt;") {
-		t.Fatal("reopening after an edit must refresh the same preview tab", updated)
-	}
-	updates := make(chan peb.UI, 2)
-	a.publisher = syncPublisher{updates: updates}
-	for _, ref := range []string{"change-preview/missing/0", "change-preview/invalid", `change-preview/turn/"one/-1`, `change-preview/turn/"one/2`, `change-preview/turn/"one/invalid`} {
-		clickActivity(t, a, ref)
-	}
-	if len(updates) != 0 {
-		t.Fatal("invalid file clicks opened a preview")
-	}
-	if allocations := testing.AllocsPerRun(100, func() {
-		if err := a.openChangePreview(`turn/"one/0`); err != nil {
-			t.Fatal(err)
-		}
-	}); allocations != 0 {
-		t.Fatalf("cached file preview allocated %g objects", allocations)
-	}
-	// A click already queued from the popover still opens its turn's preview
-	// after completion; a later turn must not reuse the earlier turn's tab.
-	f.complete = true
-	if completed := changePreviewForClick(t, a, `change-preview/turn/"one/0`); completed.ID != first.ID {
-		t.Fatal("completion changed the preview tab identity")
-	}
-	c.files = newTurnFiles("next", root)
-	c.files.add(edit)
-	if next := changePreviewForClick(t, a, "change-preview/next/0"); next.ID == first.ID {
-		t.Fatal("separate turns reused the same preview tab")
-	}
-}
-
-func TestFileChangeEditorPreviewBounds(t *testing.T) {
-	for _, diff := range []string{strings.Repeat("+界<&\n", 100000), strings.Repeat("+\n-\n", 100000)} {
-		f := newTurnFiles("turn", t.TempDir())
-		f.add(threadItem{Type: "fileChange", Status: "completed", Changes: []change{{Path: "large.go", Diff: diff}}})
-		a := &agent{selected: &conversation{files: f}}
-		a.selected.busy = true
-		ui := changePreviewForClick(t, a, "change-preview/turn/0")
-		view := ui.View
-		if !utf8.ValidString(view.HTML) || len(view.HTML) > 256<<10 || !strings.Contains(view.HTML, "部分 diff 已省略") {
-			t.Fatal("large preview must remain valid UTF-8 and explain truncation")
-		}
-		if _, err := peb.EncodeUI(nil, ui); err != nil {
-			t.Fatal("preview exceeded the extension transport budget", err)
-		}
+	if strings.Contains(view.HTML, "<pre>") || f.complete || !f.collapsed || !c.busy || f.files[0].expanded {
+		t.Fatal("live updates changed the compact popover or running state", view.HTML)
 	}
 }

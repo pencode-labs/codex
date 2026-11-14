@@ -109,7 +109,6 @@ func (a *agent) composerView() *peb.EditorView {
 	if busy && a.selected.files != nil && !a.selected.files.complete {
 		a.selected.files.prepareLive()
 		b.WriteString(a.selected.files.liveHTML)
-		bindings = append(bindings, a.selected.files.liveBindings...)
 	}
 	b.WriteString(`<form id="pencode-extension-codex-form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
 	b.WriteString(html.EscapeString(title))

@@ -188,11 +188,6 @@
 .codex-chat .codex-change-file:hover { background: var(--vscode-list-hoverBackground); }
 .codex-change-path { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .codex-change-diff { padding: 0 12px; }
-.codex-change-preview { min-width: 0; color: var(--vscode-editor-foreground); font-family: ui; }
-.codex-change-preview header { display: flex; align-items: center; gap: 12px; }
-.codex-change-preview h2 { flex: 1; min-width: 0; margin: 0; font-size: 16px; overflow-wrap: anywhere; }
-.codex-change-preview > p { overflow-wrap: anywhere; }
-.codex-change-preview .codex-change-diff { padding: 0; }
 .codex-change-diff pre { margin: 0 0 8px; font-family: monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .codex-diff { color: var(--vscode-editor-foreground); }
 .codex-diff-added { color: var(--vscode-gitDecoration-addedResourceForeground); background: var(--vscode-diffEditor-insertedLineBackground); }
@@ -222,8 +217,8 @@
 .codex-text { white-space: pre-wrap; }
 .codex-chat pre, .codex-chat code { border-radius: 8px; background: color-mix(in srgb, var(--vscode-editor-background) 50%, #000); }
 .codex-chat pre { overflow: auto; white-space: pre-wrap; padding: 12px; font-size: 12px; }
-.codex-chat code { margin: 0 4px; padding: 1px 6px; font-family: monospace; }
-.codex-chat pre code { margin: 0; padding: 0; border-radius: 0; background: transparent; }
+.codex-chat code { display: inline-block; box-sizing: border-box; max-width: calc(100% - 8px); margin: 0 4px; padding: 1px 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+.codex-chat pre code { display: inline; max-width: none; margin: 0; padding: 0; border-radius: 0; background: transparent; }
 .codex-chat table { border-collapse: collapse; width: 100%; }
 .codex-chat td, .codex-chat th { border: 1px solid var(--vscode-editorGroup-border); padding: 6px 10px; }
 .codex-chat a { color: var(--vscode-textLink-foreground); }
@@ -233,7 +228,7 @@
 .codex-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; border-radius: 2px; }
 .codex-link-icon { display: block; align-self: center; flex-shrink: 0; width: 14px; height: 14px; }
 .codex-chat .codex-link-icon { display: inline; margin-right: 4px; vertical-align: middle; }
-.codex-chat .codex-link code { margin: 0; padding: 0; background: transparent; color: inherit; }
+.codex-chat .codex-link code { display: inline; max-width: none; margin: 0; padding: 0; background: transparent; color: inherit; }
 .codex-directory { padding: 16px 24px; color: var(--vscode-editor-foreground); font-family: ui; font-size: 14px; }
 .codex-directory h2 { margin: 0 0 8px; font-size: 18px; }
 .codex-directory nav { display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }

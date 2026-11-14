@@ -595,9 +595,6 @@ func (a *agent) handleCommand(cmd command) error {
 			if c != nil && c.handleChangesClick(e.Event.Ref) {
 				return nil
 			}
-			if ref, ok := strings.CutPrefix(e.Event.Ref, "change-preview/"); ok {
-				return a.openChangePreview(ref)
-			}
 			if id, ok := strings.CutPrefix(e.Event.Ref, "rename/"); ok {
 				return a.openRename(id)
 			}
