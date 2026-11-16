@@ -179,7 +179,7 @@ func (a *agent) composerView() *peb.EditorView {
 	b.WriteString(strconv.FormatBool(a.permissionSettings))
 	b.WriteString(`" title="`)
 	b.WriteString(p.description)
-	b.WriteString(`；从下一次发送开始生效"><img src="resources/icons/`)
+	b.WriteString(`；从下一轮任务开始生效"><img src="resources/icons/`)
 	b.WriteString(p.icon)
 	b.WriteString(`.svg" alt=""><span>`)
 	if p.sandbox == "danger-full-access" {
@@ -198,20 +198,27 @@ func (a *agent) composerView() *peb.EditorView {
 		b.WriteString(`</span>`)
 	}
 	b.WriteString(`<img src="resources/icons/chevron-down.svg" alt=""></button>`)
+	action := "send"
 	if busy && a.selected.observing {
+		action = ""
 		b.WriteString(`<button class="codex-icon-button codex-send" type="button" disabled title="任务正在其他客户端执行，请在原客户端停止" aria-label="正在其他客户端执行"><img src="resources/icons/square.svg" alt=""></button>`)
-	} else if busy {
+	} else if busy && strings.TrimSpace(draft) == "" && len(files) == 0 && len(a.images[a.attachmentScope()]) == 0 {
+		action = "stop"
 		b.WriteString(`<button data-ref="stop" class="codex-icon-button codex-send" type="button" title="停止任务" aria-label="停止任务"><img src="resources/icons/square.svg" alt=""></button>`)
 	} else {
-		b.WriteString(`<button data-ref="send" class="codex-icon-button codex-send" type="button" title="发送" aria-label="发送"><img src="resources/icons/arrow-up.svg" alt=""></button>`)
+		b.WriteString(`<button data-ref="send" class="codex-icon-button codex-send" type="button" title="`)
+		if busy {
+			b.WriteString(`追加消息" aria-label="追加消息`)
+		} else {
+			b.WriteString(`发送" aria-label="发送`)
+		}
+		b.WriteString(`"><img src="resources/icons/arrow-up.svg" alt=""></button>`)
 	}
 	b.WriteString(`</div></form>`)
 	bindings = a.renderCompletion(&b, bindings)
 	bindings = append(bindings, peb.EditorBinding{Ref: "prompt", Kind: "input"}, peb.EditorBinding{Ref: "form", Kind: "submit"}, peb.EditorBinding{Ref: "add-file", Kind: "click"}, peb.EditorBinding{Ref: "permission-settings", Kind: "click"}, peb.EditorBinding{Ref: "model-settings", Kind: "click"})
-	if busy && !a.selected.observing {
-		bindings = append(bindings, peb.EditorBinding{Ref: "stop", Kind: "click"})
-	} else if !busy {
-		bindings = append(bindings, peb.EditorBinding{Ref: "send", Kind: "click"})
+	if action != "" {
+		bindings = append(bindings, peb.EditorBinding{Ref: action, Kind: "click"})
 	}
 	b.WriteString(`</section></section><aside class="codex-sidebar" aria-label="历史会话"><section class="codex-history">`)
 	bindings = append(bindings, peb.EditorBinding{Ref: "new", Kind: "click"}, peb.EditorBinding{Ref: "refresh-history", Kind: "click"})

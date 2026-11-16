@@ -1,0 +1,124 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pencode-labs/pencode/peb"
+)
+
+func TestRunningComposerSendsFollowups(t *testing.T) {
+	for _, event := range []peb.EditorEvent{{Kind: "submit", Ref: "form"}, {Kind: "click", Ref: "send"}} {
+		t.Run(event.Kind, func(t *testing.T) {
+			var output bytes.Buffer
+			progress := &turnProgress{id: "turn", started: time.Now()}
+			files := newTurnFiles("turn", t.TempDir())
+			c := &conversation{thread: thread{ID: "thread", Name: "task"}, turnID: "turn", busy: true, loaded: true, progress: progress, files: files}
+			a := &agent{selected: c, conversations: map[string]*conversation{c.ID: c}}
+			a.client = &rpcClient{ctx: t.Context(), writer: json.NewEncoder(&output), messages: make(chan envelope, 2), handle: a.onMessage}
+			if err := a.pasteImage(peb.EditorEvent{InputType: "image/png", Data: testImageURL(t), Value: "补充要求"}); err != nil {
+				t.Fatal(err)
+			}
+			a.addAttachment("context.go")
+			view := a.composerView()
+			validateBindings(t, view)
+			checkComposerAction(t, view, false)
+			for attempt := range 2 {
+				a.client.messages <- envelope{ID: json.RawMessage([]byte{'1' + byte(attempt)}), Result: json.RawMessage(`{"turnId":"turn"}`)}
+				if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: event}}); err != nil {
+					t.Fatal(err)
+				}
+				if c.draft != "" || !c.busy || c.turnID != "turn" || c.progress != progress || c.files != files || !c.dirty || len(a.images) != 0 || len(a.attachments) != 0 {
+					t.Fatal("steering reset the turn or retained accepted input")
+				}
+				checkComposerAction(t, a.composerView(), true)
+				c.dirty = false
+				a.setDraft("再补充一条")
+				if !c.dirty {
+					t.Fatal("typing did not schedule the send button update")
+				}
+				checkComposerAction(t, a.composerView(), false)
+			}
+			decoder := json.NewDecoder(&output)
+			for attempt := range 2 {
+				var request struct {
+					Params map[string]json.RawMessage
+					Method string
+				}
+				if err := decoder.Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				var inputs []input
+				if err := json.Unmarshal(request.Params["input"], &inputs); err != nil {
+					t.Fatal(err)
+				}
+				if request.Method != "turn/steer" || len(request.Params) != 3 || string(request.Params["threadId"]) != `"thread"` || string(request.Params["expectedTurnId"]) != `"turn"` {
+					t.Fatal("followup did not use the steer protocol", output.String())
+				}
+				if attempt == 0 && (len(inputs) != 2 || !strings.Contains(inputs[0].Text, "context.go") || inputs[1].Type != "image") || attempt == 1 && (len(inputs) != 1 || inputs[0].Text != "再补充一条") {
+					t.Fatal("followup lost input or reused previous attachments", inputs)
+				}
+			}
+		})
+	}
+}
+
+func TestSteerCompletionRace(t *testing.T) {
+	for _, result := range []string{"accepted", "rejected", "disconnected"} {
+		t.Run(result, func(t *testing.T) {
+			a, c, output := asyncQuestionFixture(t)
+			p := c.question("")
+			a.client.messages <- envelope{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread","turn":{"id":"turn","status":"completed"}}`)}
+			switch result {
+			case "accepted":
+				a.client.messages <- envelope{ID: json.RawMessage(`1`), Result: json.RawMessage(`{"turnId":"turn"}`)}
+			case "rejected":
+				a.client.messages <- envelope{ID: json.RawMessage(`1`), Error: &rpcError{Code: -32600, Message: "No active turn"}}
+				a.client.messages <- envelope{ID: json.RawMessage(`2`), Result: json.RawMessage(`{"turn":{"id":"next-turn","status":"inProgress"}}`)}
+			case "disconnected":
+				close(a.client.messages)
+			}
+			questionEvent(t, a, p.ref+"/0/select/0", "click", "")
+			err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "click", Ref: p.ref + "/0/next"}}})
+			if result == "disconnected" {
+				if !errors.Is(err, io.EOF) || p.answered || c.question("") != p {
+					t.Fatal("transport failure lost the answer or hid the error", err)
+				}
+			} else if err != nil || !p.answered || c.busy != (result == "rejected") {
+				t.Fatal("completion race lost the answer or running state", err)
+			}
+			if strings.Count(output.String(), `"method":"turn/steer"`) != 1 || strings.Contains(output.String(), `"method":"turn/start"`) != (result == "rejected") || c.draft != "保留草稿" {
+				t.Fatal("answer was duplicated or the composer draft changed", output.String())
+			}
+			validateBindings(t, a.composerView())
+		})
+	}
+}
+
+func TestRejectedSteerPreservesDraftAndAttachments(t *testing.T) {
+	a, c, output := asyncQuestionFixture(t)
+	c.Name = "task"
+	a.publisher = &capturedUI{}
+	a.addAttachment("context.go")
+	if err := a.pasteImage(peb.EditorEvent{InputType: "image/png", Data: testImageURL(t), Value: c.draft}); err != nil {
+		t.Fatal(err)
+	}
+	a.client.messages <- envelope{ID: json.RawMessage(`1`), Error: &rpcError{Code: -32600, Message: "Turn mismatch"}}
+	a.processCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "submit", Ref: "form"}}})
+	if c.draft != "保留草稿" || len(a.images[a.attachmentScope()]) != 1 || len(a.attachments[a.attachmentScope()]) != 1 || !c.busy || strings.Contains(output.String(), `"method":"turn/start"`) {
+		t.Fatal("rejected followup lost input or started another turn")
+	}
+	if ui := a.publisher.(*capturedUI).ui; ui.Kind != peb.Notification || !strings.Contains(ui.View.HTML, "Turn mismatch") {
+		t.Fatal("send failure was not shown as a notification", ui)
+	}
+	a.client.messages <- envelope{ID: json.RawMessage(`2`), Result: json.RawMessage(`{"turnId":"turn"}`)}
+	questionEvent(t, a, "send", "click", "")
+	if c.draft != "" || len(a.images) != 0 || len(a.attachments) != 0 {
+		t.Fatal("retry did not recover after a rejected send")
+	}
+}

@@ -22,12 +22,13 @@ func TestLiveQuestionToolInDefaultMode(t *testing.T) {
 		if resume {
 			name = "resume"
 		}
-		t.Run(name, func(t *testing.T) { testLiveQuestionTool(t, resume, false) })
+		t.Run(name, func(t *testing.T) { testLiveQuestionTool(t, resume, false, false) })
 	}
-	t.Run("async", func(t *testing.T) { testLiveQuestionTool(t, false, true) })
+	t.Run("async", func(t *testing.T) { testLiveQuestionTool(t, false, true, false) })
+	t.Run("async-steer", func(t *testing.T) { testLiveQuestionTool(t, false, true, true) })
 }
 
-func testLiveQuestionTool(t *testing.T, resume, async bool) {
+func testLiveQuestionTool(t *testing.T, resume, async, steer bool) {
 	liveCodexHome(t)
 	toolName := "request_user_input"
 	arguments := `{"questions":[{"id":"goal","header":"工作方向","question":"你希望我接下来协助你做什么？","options":[{"label":"审查现有代码","description":"检查问题"},{"label":"实现一个新功能","description":"开发需求"}],"isOther":true}]}`
@@ -37,6 +38,7 @@ func testLiveQuestionTool(t *testing.T, resume, async bool) {
 	}
 	available := make(chan bool, 4)
 	answers := make(chan string, 4)
+	steered := make(chan struct{}, 1)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			http.NotFound(w, r)
@@ -102,6 +104,13 @@ func testLiveQuestionTool(t *testing.T, resume, async bool) {
 			available <- enabled
 			if enabled {
 				emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]string{"type": "function_call", "id": "question-call", "call_id": "question-call", "name": toolName, "arguments": arguments}})
+				if steer {
+					select {
+					case <-steered:
+					case <-r.Context().Done():
+						return
+					}
+				}
 			} else {
 				text = "Question tool unavailable"
 			}
@@ -113,6 +122,7 @@ func testLiveQuestionTool(t *testing.T, resume, async bool) {
 		emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": "question-response", "status": "completed", "output": []any{}, "usage": map[string]int{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}})
 	}))
 	defer provider.Close()
+	defer close(steered)
 	config := fmt.Sprintf("model = %q\nmodel_provider = %q\n[model_providers.local_fixture]\nname = %q\nbase_url = %q\nwire_api = %q\nrequires_openai_auth = false\nsupports_websockets = false\n", "gpt-6.1-sol", "local_fixture", "Local fixture", provider.URL, "responses")
 	if err := os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
@@ -203,7 +213,7 @@ func testLiveQuestionTool(t *testing.T, resume, async bool) {
 		t.Fatal("local provider was not reached")
 	}
 	wait(t, func() bool { return c.question("") != nil })
-	if async {
+	if async && !steer {
 		wait(t, func() bool { return !c.busy })
 	}
 	view := a.composerView()
@@ -212,8 +222,16 @@ func testLiveQuestionTool(t *testing.T, resume, async bool) {
 		t.Fatal("real question tool did not show a card above the composer", view.HTML)
 	}
 	ref := c.question("").ref + "/0/"
+	turnID, progress, files := c.turnID, c.progress, c.files
+	c.draft = "保留草稿"
 	questionEvent(t, a, ref+"select/0", "click", "")
 	questionEvent(t, a, ref+"next", "click", "")
+	if steer {
+		if !c.busy || c.turnID != turnID || c.progress != progress || c.files != files {
+			t.Fatal("answer started a new turn instead of steering the active turn")
+		}
+		steered <- struct{}{}
+	}
 	wait(t, func() bool { return !c.busy })
 	select {
 	case answer := <-answers:
@@ -223,7 +241,7 @@ func testLiveQuestionTool(t *testing.T, resume, async bool) {
 	default:
 		t.Fatal("model did not receive a question answer")
 	}
-	if c.question("") != nil || !strings.Contains(a.composerView().HTML, "Question answered") {
+	if c.question("") != nil || c.draft != "保留草稿" || !strings.Contains(a.composerView().HTML, "Question answered") {
 		t.Fatal("question did not resolve and resume the assistant")
 	}
 }

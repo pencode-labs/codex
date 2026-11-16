@@ -84,6 +84,9 @@ func (a *agent) draft() string {
 
 func (a *agent) setDraft(value string) {
 	if a.selected != nil {
+		if a.selected.busy && (strings.TrimSpace(a.selected.draft) == "") != (strings.TrimSpace(value) == "") {
+			a.selected.dirty = true
+		}
 		a.selected.draft = value
 	} else {
 		if a.drafts == nil {

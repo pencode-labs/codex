@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"os"
@@ -707,11 +708,8 @@ func (a *agent) send() error {
 	if strings.TrimSpace(prompt) == "" && len(files) == 0 && len(images) == 0 {
 		return nil
 	}
-	if c != nil && c.busy {
-		if c.observing {
-			return fmt.Errorf("任务正在其他客户端执行，请等待完成或在原客户端停止")
-		}
-		return fmt.Errorf("当前会话正在工作，请等待完成或点击停止")
+	if c != nil && c.busy && c.observing {
+		return fmt.Errorf("任务正在其他客户端执行，请等待完成或在原客户端停止")
 	}
 	if err := a.connect(); err != nil {
 		return err
@@ -740,19 +738,17 @@ func (a *agent) send() error {
 			return fmt.Errorf("%s", c.status)
 		}
 	}
-	if c.busy {
-		return fmt.Errorf("当前会话仍有任务在运行，请等待完成或点击停止")
-	}
 	c.cancelEdit()
 	a.turnInputs = append(a.turnInputs[:0], input{Type: "text", Text: attachmentPrompt(prompt, files)})
 	for _, image := range images {
 		a.turnInputs = append(a.turnInputs, input{Type: "image", URL: image.url})
 	}
 	defer func() { clear(a.turnInputs); a.turnInputs = a.turnInputs[:0] }()
-	if err := a.startTurn(c, a.turnInputs); err != nil {
+	if err := a.sendTurn(c, a.turnInputs); err != nil {
 		return err
 	}
 	c.draft = ""
+	c.dirty = true
 	delete(a.attachments, a.attachmentScope())
 	delete(a.images, a.attachmentScope())
 	if fresh {
@@ -762,6 +758,30 @@ func (a *agent) send() error {
 		a.generateTitle(c, attachmentPrompt(prompt, files))
 	}
 	return nil
+}
+
+func (a *agent) sendTurn(c *conversation, inputs []input) error {
+	if c.observing {
+		return fmt.Errorf("任务正在其他客户端执行，请等待完成或在原客户端停止")
+	}
+	if !c.busy {
+		return a.startTurn(c, inputs)
+	}
+	if c.turnID == "" {
+		return fmt.Errorf("当前任务尚未就绪，请稍后重试")
+	}
+	_, err := call[json.RawMessage](a.client, "turn/steer", struct {
+		ThreadID       string  `json:"threadId"`
+		ExpectedTurnID string  `json:"expectedTurnId"`
+		Input          []input `json:"input"`
+	}{c.ID, c.turnID, inputs})
+	// Only retry a rejected request after a completion notification. Transport
+	// failures leave acceptance unknown and must preserve the input for the user.
+	var rejected *rpcError
+	if err != nil && !c.busy && errors.As(err, &rejected) {
+		return a.startTurn(c, inputs)
+	}
+	return err
 }
 
 func (a *agent) startTurn(c *conversation, inputs []input) error {

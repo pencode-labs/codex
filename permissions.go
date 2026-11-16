@@ -149,7 +149,7 @@ func (a *agent) permissionsView() *peb.EditorView {
 		bindings = append(bindings, peb.EditorBinding{Ref: p.ref, Kind: "click"})
 	}
 	if a.permissionHelp {
-		b.WriteString(`<p class="codex-permission-explanation">前两档允许在工作区内修改文件和执行命令；外部文件和网络访问分别交由你或 Codex 自动审查。自动审查仍可能拒绝风险操作，并会产生额外用量。完全访问允许直接执行操作。设置从下一次发送开始生效，不影响正在运行的任务；远程项目的文件和命令权限作用于工作区服务器。</p>`)
+		b.WriteString(`<p class="codex-permission-explanation">前两档允许在工作区内修改文件和执行命令；外部文件和网络访问分别交由你或 Codex 自动审查。自动审查仍可能拒绝风险操作，并会产生额外用量。完全访问允许直接执行操作。设置从下一轮任务开始生效，不影响正在运行的任务；远程项目的文件和命令权限作用于工作区服务器。</p>`)
 	}
 	b.WriteString(`</section>`)
 	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}

@@ -68,13 +68,6 @@ func (i *chatItem) renderMessageActions(b *strings.Builder) {
 		b.WriteString(`</span>`)
 	}
 	if i.data.ID != "" {
-		b.WriteString(`<button type="button" class="codex-icon-button" data-ref="copy-message/`)
-		b.WriteString(html.EscapeString(i.data.ID))
-		b.WriteString(`" data-pencode-copy="`)
-		b.WriteString(html.EscapeString(i.text.String()))
-		b.WriteString(`" title="复制消息" aria-label="复制消息"><img data-pencode-icon="copy" data-ref="copy-message-icon/`)
-		b.WriteString(html.EscapeString(i.data.ID))
-		b.WriteString(`" src="resources/icons/copy.svg" alt=""></button>`)
 		if i.files != nil && i.files.id != "" {
 			ref := "edit-message/" + i.data.ID
 			b.WriteString(`<button type="button" class="codex-icon-button codex-message-edit" data-ref="`)
@@ -82,6 +75,13 @@ func (i *chatItem) renderMessageActions(b *strings.Builder) {
 			b.WriteString(`" title="编辑消息" aria-label="编辑消息"><img src="resources/icons/pencil.svg" alt=""></button>`)
 			i.linkBindings = append(i.linkBindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 		}
+		b.WriteString(`<button type="button" class="codex-icon-button" data-ref="copy-message/`)
+		b.WriteString(html.EscapeString(i.data.ID))
+		b.WriteString(`" data-pencode-copy="`)
+		b.WriteString(html.EscapeString(i.text.String()))
+		b.WriteString(`" title="复制消息" aria-label="复制消息"><img data-pencode-icon="copy" data-ref="copy-message-icon/`)
+		b.WriteString(html.EscapeString(i.data.ID))
+		b.WriteString(`" src="resources/icons/copy.svg" alt=""></button>`)
 	}
 	b.WriteString(`</div>`)
 }

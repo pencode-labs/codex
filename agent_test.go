@@ -341,7 +341,9 @@ func fixtureServer() {
 					item.Questions = []asyncQuestion{{Title: "你接下来想让我帮你做什么？", Options: []string{"检查现有代码", "实现一个功能"}}}
 				}
 				notify("item/completed", map[string]any{"threadId": active, "item": item})
-				notify("turn/completed", map[string]any{"threadId": active, "turn": map[string]string{"id": turnID, "status": "completed"}})
+				if os.Getenv("PENCODE_CODEX_ASYNC_STEER") != "1" {
+					notify("turn/completed", map[string]any{"threadId": active, "turn": map[string]string{"id": turnID, "status": "completed"}})
+				}
 				continue
 			}
 			response(map[string]any{"turn": map[string]string{"id": "turn1", "status": "inProgress"}})
@@ -355,6 +357,20 @@ func fixtureServer() {
 			}
 			notify("item/started", map[string]any{"threadId": active, "item": map[string]string{"id": "cmd", "type": "commandExecution", "command": "go test ./...", "status": "inProgress"}})
 			send(map[string]any{"id": 100, "method": "item/commandExecution/requestApproval", "params": map[string]string{"threadId": active, "turnId": "turn1", "itemId": "cmd", "command": "go test ./...", "reason": "fixture approval"}})
+		case "turn/steer":
+			var p struct {
+				ThreadID       string  `json:"threadId"`
+				ExpectedTurnID string  `json:"expectedTurnId"`
+				Input          []input `json:"input"`
+			}
+			if err := json.Unmarshal(msg.Params, &p); err != nil || p.ThreadID != active || p.ExpectedTurnID != "async-question-turn" || len(p.Input) != 1 {
+				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32602, "message": "steer targeted the wrong task"}})
+				continue
+			}
+			notify("item/completed", map[string]any{"threadId": active, "item": threadItem{ID: "steered-user", Type: "userMessage", Content: p.Input}})
+			notify("item/completed", map[string]any{"threadId": active, "item": threadItem{ID: "steered-answer", Type: "agentMessage", Text: "收到回答：" + p.Input[0].Text}})
+			notify("turn/completed", map[string]any{"threadId": active, "turn": map[string]string{"id": p.ExpectedTurnID, "status": "completed"}})
+			response(map[string]string{"turnId": p.ExpectedTurnID})
 		case "turn/interrupt":
 			var p struct {
 				ThreadID string `json:"threadId"`
@@ -564,7 +580,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		t.Fatal("wrong permission menu or default", permissions)
 	}
 	event("permissions", "click", "permission-help", "")
-	waitUI("permissions", "设置从下一次发送开始生效")
+	waitUI("permissions", "设置从下一轮任务开始生效")
 	event("permissions", "close", "", "")
 	waitUI("composer", `aria-label="权限设置" aria-expanded="false"`)
 	event("composer", "click", "model-settings", "")
@@ -622,13 +638,13 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("models", "click", "effort/high", "")
 	waitUI("composer", "Fixture Luna")
 	event("composer", "click", "send", "")
-	// The first paint must already offer Stop, before the server acknowledges.
+	// The first paint must show processing before the server acknowledges.
 	firstUpdate := waitUI("composer", "给 Codex 的任务")
 	if !firstUpdate.Busy {
 		t.Fatal("tab must show processing before turn acknowledgement")
 	}
 	firstPaint := firstUpdate.View
-	checkComposerAction(t, firstPaint, true)
+	checkComposerAction(t, firstPaint, false)
 	if !strings.Contains(firstPaint.HTML, "正在思考") {
 		t.Fatal("first paint must show thinking before turn acknowledgement", firstPaint.HTML)
 	}
@@ -903,15 +919,15 @@ func TestAgentPEBWorkflow(t *testing.T) {
 
 var refPattern = regexp.MustCompile(`data-ref="([^"]+)"`)
 
-func checkComposerAction(t *testing.T, view *peb.EditorView, running bool) {
+func checkComposerAction(t *testing.T, view *peb.EditorView, stopping bool) {
 	t.Helper()
 	ref, icon, other := "send", "arrow-up", "stop"
-	if running {
+	if stopping {
 		ref, icon, other = "stop", "square", "send"
 	}
 	if !strings.Contains(view.HTML, `data-ref="`+ref+`" class="codex-icon-button codex-send"`) ||
 		!strings.Contains(view.HTML, `src="resources/icons/`+icon+`.svg"`) || strings.Contains(view.HTML, `data-ref="`+other+`"`) {
-		t.Fatalf("wrong composer action for running=%t: %s", running, view.HTML)
+		t.Fatalf("wrong composer action for stopping=%t: %s", stopping, view.HTML)
 	}
 	for _, binding := range view.Events {
 		if binding.Ref == ref && binding.Kind == "click" {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"html"
 	"strconv"
@@ -116,23 +115,8 @@ func (a *agent) answerQuestion(c *conversation, p *userInputRequest, decision st
 			}
 		}
 		inputs := []input{{Type: "text", Text: b.String()}}
-		if c.busy {
-			_, err := call[json.RawMessage](a.client, "turn/steer", struct {
-				ThreadID       string  `json:"threadId"`
-				ExpectedTurnID string  `json:"expectedTurnId"`
-				Input          []input `json:"input"`
-			}{c.ID, c.turnID, inputs})
-			if err != nil && c.busy {
-				return err
-			}
-			if err == nil {
-				p.answered = true
-			}
-		}
-		if !p.answered {
-			if err := a.startTurn(c, inputs); err != nil {
-				return err
-			}
+		if err := a.sendTurn(c, inputs); err != nil {
+			return err
 		}
 	}
 	p.answered, c.dirty = true, true
