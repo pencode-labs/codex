@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -347,9 +348,20 @@ func TestLiveFileChangesUseNativeDiffLinks(t *testing.T) {
 		{Path: "test/<file & 道>.go", Diff: "deleted\n"},
 		{Path: external, Diff: "+external\n"},
 	}})
-	c := &conversation{context: peb.ActionContext{ProjectPath: root}, files: f, busy: true}
+	c := &conversation{context: peb.ActionContext{ProjectPath: root}, busy: true, draft: "保留草稿"}
 	a := &agent{selected: c}
+	initial, _, err := peb.SplitViewRegions(a.composerView().HTML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.files = f
 	view := a.composerView()
+	template, regions, err := peb.SplitViewRegions(view.HTML)
+	if err != nil || template != initial || !slices.ContainsFunc(regions, func(region peb.ViewRegion) bool {
+		return region.Ref == "live-changes-region" && strings.Contains(region.HTML, `class="codex-live-changes"`)
+	}) {
+		t.Fatal("live changes must update inside their region without replacing the composer", err)
+	}
 	validateBindings(t, view)
 	for index, file := range f.files {
 		name := file.path

@@ -106,11 +106,12 @@ func (a *agent) composerView() *peb.EditorView {
 			bindings = q.render(&b, bindings)
 		}
 	}
+	b.WriteString(`<div data-ref="live-changes-region" data-pencode-region>`)
 	if busy && a.selected.files != nil && !a.selected.files.complete {
 		a.selected.files.prepareLive()
 		b.WriteString(a.selected.files.liveHTML)
 	}
-	b.WriteString(`<form id="pencode-extension-codex-form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
+	b.WriteString(`</div><form id="pencode-extension-codex-form" data-ref="form" data-pencode-focus="prompt" class="codex-input-card" aria-label="`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`">`)
 	if images := a.images[a.attachmentScope()]; len(images) > 0 {
@@ -263,16 +264,16 @@ func (a *agent) appendHistoryView(b *strings.Builder, bindings []peb.EditorBindi
 			b.WriteString(html.EscapeString(title))
 			b.WriteString(`</button>`)
 			renameRef := "rename/" + t.ID
-			b.WriteString(`<div class="codex-history-actions">`)
+			b.WriteString(`<div class="codex-history-actions"><button class="codex-icon-button" type="button" data-ref="`)
+			b.WriteString(html.EscapeString(renameRef))
+			b.WriteString(`" title="修改会话标题" aria-label="修改会话标题" aria-haspopup="dialog"><img src="resources/icons/pencil.svg" alt=""></button>`)
 			c := a.conversations[t.ID]
 			if c != nil && c.busy || c == nil && t.Status.Type == "active" {
 				b.WriteString(`<img class="codex-history-running" src="resources/icons/loader-circle.svg" role="status" aria-label="会话运行中" title="会话运行中" alt="">`)
 			} else if c != nil && c.unread {
 				b.WriteString(`<span class="codex-history-unread" role="status" aria-label="会话已完成，尚未查看" title="会话已完成，尚未查看"></span>`)
 			}
-			b.WriteString(`<button class="codex-icon-button" type="button" data-ref="`)
-			b.WriteString(html.EscapeString(renameRef))
-			b.WriteString(`" title="修改会话标题" aria-label="修改会话标题" aria-haspopup="dialog"><img src="resources/icons/pencil.svg" alt=""></button></div></div>`)
+			b.WriteString(`</div></div>`)
 			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"}, peb.EditorBinding{Ref: renameRef, Kind: "click"})
 		}
 		if a.history.NextCursor != "" {
