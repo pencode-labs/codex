@@ -135,6 +135,7 @@ func (c *conversation) cancelEdit() {
 	}
 	if c.editReverted {
 		c.items = slices.DeleteFunc(c.items, func(i *chatItem) bool { return i == c.editing })
+		c.itemsByID = nil
 	}
 	c.editing, c.editDraft, c.editInputs, c.editReverted = nil, "", nil, false
 	c.dirty = true
@@ -230,8 +231,7 @@ func (a *agent) sendEditedMessage() error {
 		if start < 0 {
 			start = len(c.items)
 		}
-		clear(c.items[start:])
-		c.items = append(c.items[:start], i)
+		c.replaceItemTail(start, i)
 		i.files, i.progress, i.html = nil, nil, ""
 		c.progress, c.files, c.requests, c.turnID = nil, nil, nil, ""
 		c.editInputs, c.editReverted, c.dirty = inputs, true, true

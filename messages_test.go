@@ -155,6 +155,9 @@ func TestEditedMessageRevertsOnceAndRetriesWithOriginalAttachments(t *testing.T)
 		envelope{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread","item":{"id":"new-user","type":"userMessage","content":[{"type":"text","text":"new prompt"}]}}`)},
 		envelope{ID: json.RawMessage(`6`), Result: json.RawMessage(`{"turn":{"id":"replacement","status":"inProgress"}}`)},
 	)
+	if c.item("later") != c.items[3] {
+		t.Fatal("lookup lost the existing later turn")
+	}
 	_ = a.editMessage(c.items[1].data.ID)
 	c.editDraft = "new prompt"
 	if err := a.sendEditedMessage(); err == nil || !strings.Contains(err.Error(), "retry") {
@@ -163,12 +166,18 @@ func TestEditedMessageRevertsOnceAndRetriesWithOriginalAttachments(t *testing.T)
 	if !c.editReverted || c.editing == nil || c.editDraft != "new prompt" || len(c.items) != 2 || c.items[0].data.ID != "prior" || c.cursor != "fresh-cursor" || c.busy {
 		t.Fatal("failed send lost the inline draft or retained removed history")
 	}
+	if byID := c.itemIndex(); byID["later"] != nil || byID["reply"] != nil || byID[c.editing.data.ID] != c.editing {
+		t.Fatal("reverted turn left stale entries in the item index")
+	}
 	validateBindings(t, a.composerView())
 	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "submit", Ref: "message-edit-form"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if c.editing != nil || len(c.items) != 2 || c.items[1].data.ID != "new-user" || c.draft != "keep composer draft" || !c.busy {
 		t.Fatal("successful retry lost the replacement or composer draft")
+	}
+	if byID := c.itemIndex(); len(byID) != 2 || byID["new-user"] != c.items[1] || byID["prior"] != c.items[0] {
+		t.Fatal("retry left the item index out of sync")
 	}
 	decoder := json.NewDecoder(output)
 	wantMethods := []string{"thread/items/list", "thread/items/list", "thread/revert", "thread/turns/list", "turn/start", "turn/start"}

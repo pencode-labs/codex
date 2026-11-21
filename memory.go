@@ -13,6 +13,7 @@ func (a *agent) trimConversations() {
 			if c == a.selected && a.workspaceOpen && !a.workspaceHidden || c.busy || c.observing || len(c.requests) != 0 || c.editing != nil {
 				continue
 			}
+			c.itemsByID = nil
 			c.releasePaintBefore(len(c.items))
 			if len(c.items) == 0 {
 				continue

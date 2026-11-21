@@ -142,6 +142,7 @@ func (a *agent) reconcileObserved(c *conversation, turns []turn) {
 			break
 		}
 	}
+	byID := c.itemIndex()
 	var updated []*chatItem
 	for index := len(turns) - 1; index >= 0; index-- {
 		t := turns[index]
@@ -159,13 +160,7 @@ func (a *agent) reconcileObserved(c *conversation, turns []turn) {
 		}
 		for _, data := range t.Items {
 			files.add(data)
-			var item *chatItem
-			for _, existing := range old {
-				if existing.data.ID == data.ID {
-					item = existing
-					break
-				}
-			}
+			item := byID[data.ID]
 			if item == nil {
 				item = &chatItem{}
 			}
@@ -192,7 +187,7 @@ func (a *agent) reconcileObserved(c *conversation, turns []turn) {
 			c.files, c.progress = files, progress
 		}
 	}
-	c.items = append(old[:prefix], updated...)
+	c.replaceItemTail(prefix, updated...)
 	c.resolvePastQuestions()
 	changed := latest.ID != c.observedTurn || latest.Status != c.observedStatus
 	if changed && latest.Status == "completed" && c.observedTurn != "" && (c != a.selected || !a.workspaceOpen || a.workspaceHidden) {

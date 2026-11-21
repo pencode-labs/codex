@@ -102,6 +102,7 @@ type approval struct {
 	params    json.RawMessage
 }
 type conversation struct {
+	itemsByID map[string]*chatItem
 	syncAfter time.Time
 	editing   *chatItem
 	titleJob  *titleJob
@@ -356,7 +357,7 @@ func (a *agent) closeClient() {
 			c.titleJob = nil
 		}
 		c.finishProgress(turn{}, time.Now())
-		c.items, c.requests = nil, nil
+		c.items, c.itemsByID, c.requests = nil, nil, nil
 		c.files = nil
 		c.loaded = false
 		c.observing = false
@@ -893,7 +894,7 @@ func (a *agent) resume(id string) error {
 			c = &conversation{thread: thread{ID: id}, context: a.context}
 			a.conversations[id] = c
 		}
-		c.items, c.progress, c.files, c.cursor = nil, nil, nil, ""
+		c.items, c.itemsByID, c.progress, c.files, c.cursor = nil, nil, nil, nil, ""
 		resumed := false
 		defer func() {
 			if fresh && !resumed {
@@ -951,7 +952,7 @@ func (a *agent) resume(id string) error {
 			}
 		}
 		if c.editing != nil && c.editReverted {
-			c.items = append(c.items, c.editing)
+			c.replaceItemTail(len(c.items), c.editing)
 		}
 	}
 	a.history.include(c.thread)
@@ -995,6 +996,7 @@ func (a *agent) readHistory(c *conversation) error {
 		return err
 	}
 	var older []*chatItem
+	byID := c.itemIndex()
 	slices.Reverse(page.Data)
 	if c.observing && c.cursor == "" && len(page.Data) > 0 {
 		latest := &page.Data[len(page.Data)-1]
@@ -1019,7 +1021,7 @@ func (a *agent) readHistory(c *conversation) error {
 			c.files = files
 		}
 		for _, item := range t.Items {
-			if !slices.ContainsFunc(c.items, func(i *chatItem) bool { return i.data.ID == item.ID }) {
+			if byID[item.ID] == nil {
 				if !files.complete {
 					files.add(item)
 				}
@@ -1035,14 +1037,16 @@ func (a *agent) readHistory(c *conversation) error {
 		}
 		files.complete = files.complete || t.Status != "inProgress"
 	}
-	c.items = append(older, c.items...)
+	if len(older) != 0 {
+		for _, item := range slices.Backward(older) {
+			byID[item.data.ID] = item
+		}
+		c.items = append(older, c.items...)
+	}
 	c.resolvePastQuestions()
 	if c.editing != nil {
-		for _, i := range c.items {
-			if i.data.ID == c.editing.data.ID {
-				c.editing = i
-				break
-			}
+		if item := byID[c.editing.data.ID]; item != nil {
+			c.editing = item
 		}
 	}
 	c.cursor = page.NextCursor
@@ -1109,16 +1113,33 @@ func appendText(b *strings.Builder, text string) {
 	b.WriteString(text)
 }
 
-func (c *conversation) item(id string) *chatItem {
-	for _, item := range c.items {
-		if item.data.ID == id {
-			return item
+// Bulk transcript replacements invalidate the index. Live events extend it
+// alongside the display slice, so consecutive deltas only need one lookup.
+func (c *conversation) itemIndex() map[string]*chatItem {
+	if c.itemsByID == nil {
+		c.itemsByID = make(map[string]*chatItem, len(c.items))
+		for _, item := range slices.Backward(c.items) {
+			c.itemsByID[item.data.ID] = item
 		}
+	}
+	return c.itemsByID
+}
+
+func (c *conversation) replaceItemTail(start int, items ...*chatItem) {
+	c.items = slices.Replace(c.items, start, len(c.items), items...)
+	c.itemsByID = nil
+}
+
+func (c *conversation) item(id string) *chatItem {
+	byID := c.itemIndex()
+	if item := byID[id]; item != nil {
+		return item
 	}
 	i := newChatItem(threadItem{ID: id, Type: "agentMessage"}, false)
 	i.progress = c.progress
 	i.files = c.files
 	c.items = append(c.items, i)
+	byID[id] = i
 	return i
 }
 
