@@ -1042,7 +1042,7 @@ func TestHistoryRetainsNewThreadsAndDeduplicatesPages(t *testing.T) {
 
 func TestMarkdownIsEscapedAndDoesNotLoadImages(t *testing.T) {
 	var b strings.Builder
-	renderMarkdown(&b, "**safe**\n\n<script>alert(1)</script>\n\n![secret](https://example.com/secret)\n\nafter image", "", "test")
+	renderMarkdown(&b, "**safe**\n\n<script>alert(1)</script>\n\n![secret](https://example.com/secret)\n\nafter image", chatMarkdownState{scope: "test"})
 	if !strings.Contains(b.String(), "<strong>safe</strong>") || strings.Contains(b.String(), "<script>") || strings.Contains(b.String(), "<img") || !strings.Contains(b.String(), "after image") {
 		t.Fatal(b.String())
 	}

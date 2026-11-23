@@ -16,14 +16,6 @@ import (
 	"github.com/yuin/goldmark/v2/util"
 )
 
-var chatLinkContext = renderer.NewContextKey()
-
-type chatLinkState struct {
-	root, scope string
-	bindings    []peb.EditorBinding
-	index       int
-}
-
 func chatLinkDecorator(markdownhtml.NodeRenderer) markdownhtml.NodeRenderer {
 	return markdownhtml.NodeRendererFunc(renderChatLink)
 }
@@ -43,13 +35,13 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 	case *ast.AutoLink:
 		destination = n.Destination.Value(source)
 	}
-	links := context.Get(chatLinkContext).(*chatLinkState)
+	links := context.Get(chatMarkdownContext).(*chatMarkdownState)
 	href, icon, directory := chatLinkTarget(destination, links.root)
 	var ref string
 	_, _ = w.WriteString(`<a role="link"`)
 	if href != "" {
-		ref = "link/" + links.scope + "/" + strconv.Itoa(links.index)
-		links.index++
+		ref = "link/" + links.scope + "/" + strconv.Itoa(links.linkIndex)
+		links.linkIndex++
 		if directory != "" {
 			ref = "directory/" + url.PathEscape(directory) + "/" + ref
 			links.bindings = append(links.bindings, peb.EditorBinding{Ref: ref, Kind: "click"})

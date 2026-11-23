@@ -1,6 +1,8 @@
 package main
 
 import (
+	"html"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -17,7 +19,6 @@ func TestChatMarkdownStrong(t *testing.T) {
 		{"***重点***", "<p><em><strong>重点</strong></em></p>\n"},
 		{"**安全 `key`：**保护", "<p><strong>安全 <code>key</code>：</strong>保护</p>\n"},
 		{"`**普通文本**`", "<p><code>**普通文本**</code></p>\n"},
-		{"```text\n**普通文本**\n```", "<pre><code class=\"language-text\">**普通文本**\n</code></pre>\n"},
 		{`\*\*普通文本\*\*`, "<p>**普通文本**</p>\n"},
 		{"**未结束", "<p>**未结束</p>\n"},
 		{"** 空白 **", "<p>** 空白 **</p>\n"},
@@ -25,10 +26,59 @@ func TestChatMarkdownStrong(t *testing.T) {
 	} {
 		t.Run(tc.source, func(t *testing.T) {
 			var b strings.Builder
-			renderMarkdown(&b, tc.source, "", "message")
+			renderMarkdown(&b, tc.source, chatMarkdownState{scope: "message"})
 			if got := b.String(); got != tc.want {
 				t.Fatalf("renderMarkdown() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestChatFencedCodeBlocks(t *testing.T) {
+	const code = "  echo \"$HOME\"  # <tag> & 'text'\n\n\tprintf ok\n"
+	var b strings.Builder
+	renderMarkdown(&b, "`inline`\n\n```sh example\n"+code+"```\n\n~~~\n**普通文本**\n~~~\n\n```x-unknown<&\n<literal>\n```\n\n    indented", chatMarkdownState{scope: "message"})
+	markup := b.String()
+	for _, want := range []string{
+		"<code>inline</code>", ">Bash</span>", ">代码</span>", ">x-unknown&lt;&amp;</span>",
+		`data-pencode-copy="` + html.EscapeString(code) + `"`, `class="tok-variable"`, `class="tok-comment"`,
+		"<pre><code>**普通文本**\n</code></pre>", "<pre><code>&lt;literal&gt;\n</code></pre>", "<pre><code>indented\n</code></pre>",
+	} {
+		if !strings.Contains(markup, want) {
+			t.Errorf("missing %q in %s", want, markup)
+		}
+	}
+	_, body, _ := strings.Cut(markup, "<pre><code>")
+	body, _, _ = strings.Cut(body, "</code>")
+	if got := html.UnescapeString(regexp.MustCompile(`</?span[^>]*>`).ReplaceAllString(body, "")); got != code {
+		t.Fatalf("highlighted text = %q, want %q", got, code)
+	}
+}
+
+func TestChatCodeBlockWrapDuringStream(t *testing.T) {
+	i := newChatItem(threadItem{Type: "agentMessage", ID: "reply", Text: "```go\nvar a = 1\n```\n\n```bash\necho"}, false)
+	c := &conversation{items: []*chatItem{i}}
+	a := &agent{selected: c}
+	view := a.composerView()
+	validateBindings(t, view)
+	var wrapRefs []string
+	for _, event := range view.Events {
+		if strings.HasPrefix(event.Ref, "wrap-code/") {
+			wrapRefs = append(wrapRefs, event.Ref)
+		}
+	}
+	if len(wrapRefs) != 2 {
+		t.Fatalf("streamed block controls = %v", wrapRefs)
+	}
+	a.toggleTranscript(wrapRefs[1])
+	i.replace(threadItem{Type: "agentMessage", ID: "reply", Text: i.text.String() + " done\n```"}, true)
+	view = a.composerView()
+	validateBindings(t, view)
+	if strings.Count(view.HTML, `class="codex-code-wrapped"`) != 1 || !strings.Contains(view.HTML, "aria-pressed=\"true\"") || !strings.Contains(view.HTML, "data-pencode-copy=\"echo done\n\"") {
+		t.Fatal("completed block lost its contents or wrap selection", i.html)
+	}
+	a.toggleTranscript(wrapRefs[1])
+	if strings.Contains(a.composerView().HTML, `class="codex-code-wrapped"`) {
+		t.Fatal("wrap toggle did not restore horizontal scrolling")
 	}
 }

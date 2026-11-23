@@ -7,12 +7,14 @@ import (
 )
 
 type turnProgress struct {
-	started            time.Time
-	id                 string
-	toggleRef          string
-	elapsed            time.Duration
-	received, complete bool
-	expanded           bool
+	started   time.Time
+	id        string
+	toggleRef string
+	elapsed   time.Duration
+	// Live item positions stay stable when older history is prepended.
+	liveItems, lastOutput, followupFrom int
+	received, complete                  bool
+	expanded                            bool
 }
 
 func (c *conversation) turnProgress(id string) *turnProgress {
@@ -63,9 +65,20 @@ func (i *chatItem) modelText() bool {
 	return (i.data.Type == "agentMessage" || i.data.Type == "reasoning" || i.data.Type == "plan") && i.text.Len() > 0
 }
 
+func (i *chatItem) receivedModelOutput() {
+	if p := i.progress; p != nil {
+		p.received = true
+		p.lastOutput = max(p.lastOutput, i.liveOrder)
+	}
+}
+
+func (p *turnProgress) hasReply() bool {
+	return p.received && p.lastOutput >= p.followupFrom
+}
+
 func (a *agent) progressVisible() bool {
 	c := a.selected
-	return a.workspaceOpen && c != nil && c.busy && c.progress != nil && !c.progress.complete && c.progress.received
+	return a.workspaceOpen && c != nil && c.busy && c.progress != nil && !c.progress.complete && c.progress.hasReply()
 }
 
 func (a *agent) updateProgress(now time.Time) {
@@ -81,7 +94,7 @@ func (a *agent) updateProgress(now time.Time) {
 }
 
 func (p *turnProgress) render(b *strings.Builder, collapsible bool) {
-	thinking := !p.received && !p.complete
+	thinking := !p.complete && !p.hasReply()
 	b.WriteString(`<div class="codex-turn-progress" role="status"`)
 	if p.id != "" {
 		b.WriteString(` data-ref="progress/`)

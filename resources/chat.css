@@ -219,6 +219,21 @@
 .codex-chat pre { overflow: auto; white-space: pre-wrap; padding: 12px; font-size: 12px; }
 .codex-chat code { display: inline-block; box-sizing: border-box; max-width: calc(100% - 8px); margin: 0 4px; padding: 1px 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
 .codex-chat pre code { display: inline; max-width: none; margin: 0; padding: 0; border-radius: 0; background: transparent; }
+.codex-code-block { min-width: 0; margin: 12px 0; padding: 12px 16px 12px 20px; overflow: hidden; border: 1px solid var(--vscode-editorWidget-border); border-radius: 18px; background: color-mix(in srgb, var(--vscode-editor-foreground) 8%, var(--vscode-editor-background)); }
+.codex-code-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--vscode-editor-foreground); font-size: 13px; line-height: 1.4; }
+.codex-code-header > img { flex-shrink: 0; width: 16px; height: 16px; }
+.codex-code-header > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codex-code-header button[aria-pressed="true"] { background: var(--vscode-toolbar-hoverBackground); }
+.codex-chat .codex-code-block pre { margin: 0; padding: 0; border-radius: 0; background: transparent; font-family: monospace; font-size: 13px; line-height: 1.55; white-space: pre; overflow-wrap: normal; }
+.codex-chat .codex-code-block pre.codex-code-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
+.codex-code-block pre code { white-space: inherit; overflow-wrap: inherit; }
+.codex-code-block .tok-keyword, .codex-code-block .tok-variable { color: var(--vscode-syntax-keyword); }
+.codex-code-block .tok-type { color: var(--vscode-syntax-type); }
+.codex-code-block .tok-function { color: var(--vscode-syntax-function); }
+.codex-code-block .tok-string { color: var(--vscode-syntax-string); }
+.codex-code-block .tok-number { color: var(--vscode-syntax-number); }
+.codex-code-block .tok-comment { color: var(--vscode-syntax-comment); }
+.codex-code-block .tok-operator { color: var(--vscode-syntax-operator); }
 .codex-chat table { border-collapse: collapse; width: 100%; }
 .codex-chat td, .codex-chat th { border: 1px solid var(--vscode-editorGroup-border); padding: 6px 10px; }
 .codex-chat a { color: var(--vscode-textLink-foreground); }

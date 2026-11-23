@@ -155,7 +155,7 @@ func TestEditedMessageRevertsOnceAndRetriesWithOriginalAttachments(t *testing.T)
 		envelope{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread","item":{"id":"new-user","type":"userMessage","content":[{"type":"text","text":"new prompt"}]}}`)},
 		envelope{ID: json.RawMessage(`6`), Result: json.RawMessage(`{"turn":{"id":"replacement","status":"inProgress"}}`)},
 	)
-	if c.item("later") != c.items[3] {
+	if c.item("later", "agentMessage") != c.items[3] {
 		t.Fatal("lookup lost the existing later turn")
 	}
 	_ = a.editMessage(c.items[1].data.ID)

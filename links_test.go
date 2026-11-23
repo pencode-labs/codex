@@ -13,7 +13,7 @@ import (
 
 func TestChatMarkdownRetainsLineBreaksAndEmoji(t *testing.T) {
 	var b strings.Builder
-	renderMarkdown(&b, "第一行\n第二行\n\n下一段\n\n```text\nfirst\n\nlast\n```\n\n| 名称 | 是否通过 |\n| --- | --- |\n| 正常 | ✅ |\n| 超出 | ❌ |", "", "message")
+	renderMarkdown(&b, "第一行\n第二行\n\n下一段\n\n```text\nfirst\n\nlast\n```\n\n| 名称 | 是否通过 |\n| --- | --- |\n| 正常 | ✅ |\n| 超出 | ❌ |", chatMarkdownState{scope: "message"})
 	for _, want := range []string{"第一行<br>\n第二行", "<p>下一段</p>", "first\n\nlast\n", "<td>✅</td>", "<td>❌</td>"} {
 		if !strings.Contains(b.String(), want) {
 			t.Fatalf("missing %q in %s", want, b.String())
@@ -27,7 +27,7 @@ func TestChatLinksRenderTargetsAndIcons(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b strings.Builder
-	bindings := renderMarkdown(&b, "[目录](docs) [说明](guide%20notes.md) [`index.html`](index.html:12) [网站](https://example.com?q=1&x=2) https://example.org\n\n[危险](javascript:alert%281%29) ![隐藏](https://example.com/secret)", root, "message")
+	bindings := renderMarkdown(&b, "[目录](docs) [说明](guide%20notes.md) [`index.html`](index.html:12) [网站](https://example.com?q=1&x=2) https://example.org\n\n[危险](javascript:alert%281%29) ![隐藏](https://example.com/secret)", chatMarkdownState{root: root, scope: "message"})
 	view := &peb.EditorView{HTML: b.String(), Events: bindings}
 	validateBindings(t, view)
 	for _, want := range []string{`data-pencode-icon="folder"`, `data-pencode-icon="file-text"`, `data-pencode-icon="code"`, `data-pencode-icon="globe"`, `href="./index.html:12"`, `href="https://example.com?q=1&amp;x=2"`, `href="https://example.org"`, `<a role="link"`, `<code>index.html</code>`} {

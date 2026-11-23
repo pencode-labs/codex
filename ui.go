@@ -35,7 +35,7 @@ func previewID(kind, key string) string {
 // Simple delimiter rules allow emphasis beside CJK punctuation without spaces.
 var chatParser = parser.New(parser.WithParseDelimiterFunc(parser.ParseDelimiterSimple), parser.WithExtensions(extension.TableParser, extension.NewLinkifyParser()))
 var chatRenderer = markdownhtml.New(markdownhtml.WithHardWraps(), markdownhtml.WithExtensions(extension.TableHTMLRenderer), markdownhtml.WithNodeRendererDecorators(map[ast.NodeKind]markdownhtml.NodeRendererDecorator{
-	ast.KindLink: chatLinkDecorator, ast.KindAutoLink: chatLinkDecorator,
+	ast.KindLink: chatLinkDecorator, ast.KindAutoLink: chatLinkDecorator, ast.KindCodeBlock: chatCodeBlockDecorator,
 }))
 
 func (a *agent) flush() {
@@ -413,9 +413,10 @@ func (c *conversation) renderTurn(b *strings.Builder, bindings []peb.EditorBindi
 	if p == nil {
 		return c.renderItems(b, bindings, items, latestActivity)
 	}
-	// Keep the prompt and final response outside the region replaced by a toggle.
+	// During a steer, put progress below the latest input, even before its echo.
+	// Completed turns keep their original prompt outside the collapsible region.
 	start := 0
-	for start < len(items) && items[start].data.Type == "userMessage" {
+	for start < len(items) && (items[start].data.Type == "userMessage" || !p.complete && items[start].liveOrder < p.followupFrom) {
 		start++
 	}
 	bindings = c.renderItems(b, bindings, items[:start], latestActivity)
@@ -489,7 +490,7 @@ func (c *conversation) renderItems(b *strings.Builder, bindings []peb.EditorBind
 }
 
 func (i *chatItem) render(b *strings.Builder, root, scope string) {
-	i.linkBindings = nil
+	i.linkBindings = i.linkBindings[:0]
 	if i.questions != nil && !i.questions.answered {
 		return
 	}
@@ -583,8 +584,11 @@ func (i *chatItem) render(b *strings.Builder, root, scope string) {
 		b.WriteString(`<div class="codex-activity-details">`)
 	}
 	if i.text.Len() > 0 && (i.data.Type != "userMessage" || !renderQuestionReplies(b, i.text.String())) {
-		if i.complete && (i.data.Type == "userMessage" || i.data.Type == "agentMessage" || i.data.Type == "plan") {
-			i.linkBindings = append(i.linkBindings, renderMarkdown(b, i.text.String(), root, scope)...)
+		source := i.text.String()
+		markdown := i.data.Type == "userMessage" || i.data.Type == "agentMessage" || i.data.Type == "plan"
+		if markdown && (i.complete || strings.Contains(source, "```") || strings.Contains(source, "~~~")) {
+			state := chatMarkdownState{root: root, scope: scope, wrapped: i.wrappedCode, bindings: i.linkBindings}
+			i.linkBindings = renderMarkdown(b, source, state)
 		} else {
 			b.WriteString(`<div class="codex-text" data-pencode-preserve-whitespace>`)
 			b.WriteString(html.EscapeString(i.text.String()))
@@ -621,7 +625,16 @@ func pre(b *strings.Builder, text string) {
 	b.WriteString(`</code></pre>`)
 }
 
-func renderMarkdown(b *strings.Builder, source, root, scope string) []peb.EditorBinding {
+var chatMarkdownContext = renderer.NewContextKey()
+
+type chatMarkdownState struct {
+	wrapped              map[string]bool
+	root, scope          string
+	bindings             []peb.EditorBinding
+	linkIndex, codeIndex int
+}
+
+func renderMarkdown(b *strings.Builder, source string, state chatMarkdownState) []peb.EditorBinding {
 	document := chatParser.ParseStringSource(source)
 	// Chat text must not initiate resource loads or leak the task in image URLs.
 	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -631,13 +644,12 @@ func renderMarkdown(b *strings.Builder, source, root, scope string) []peb.Editor
 		}
 		return ast.WalkContinue, nil
 	})
-	links := chatLinkState{root: root, scope: scope}
 	context := renderer.NewContext()
-	context.Set(chatLinkContext, &links)
+	context.Set(chatMarkdownContext, &state)
 	if err := chatRenderer.RenderStringSource(b, source, document, renderer.WithContext(context)); err != nil {
 		pre(b, source)
 	}
-	return links.bindings
+	return state.bindings
 }
 
 func (r *approval) render(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {

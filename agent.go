@@ -79,6 +79,7 @@ type threadStatus struct {
 	Type string `json:"type"`
 }
 type chatItem struct {
+	wrappedCode   map[string]bool
 	sentAt        time.Time
 	progress      *turnProgress
 	files         *turnFiles
@@ -90,6 +91,7 @@ type chatItem struct {
 	images        []imageAttachment
 	linkBindings  []peb.EditorBinding
 	data          threadItem
+	liveOrder     int
 	expanded      bool
 	sweep         bool
 	groupExpanded bool
@@ -633,6 +635,18 @@ func (a *agent) toggleTranscript(ref string) bool {
 			p.expanded = !p.expanded
 			c.dirty = true
 		}
+	case "wrap-code":
+		for _, item := range c.items {
+			if !slices.Contains(item.linkBindings, peb.EditorBinding{Ref: ref, Kind: "click"}) {
+				continue
+			}
+			if item.wrappedCode == nil {
+				item.wrappedCode = make(map[string]bool)
+			}
+			item.wrappedCode[ref] = !item.wrappedCode[ref]
+			item.html, c.dirty = "", true
+			break
+		}
 	case "item", "activity":
 		for _, i := range c.items {
 			if kind == "item" && i.detailRef == ref {
@@ -771,11 +785,24 @@ func (a *agent) sendTurn(c *conversation, inputs []input) error {
 	if c.turnID == "" {
 		return fmt.Errorf("当前任务尚未就绪，请稍后重试")
 	}
+	p := c.progress
+	if p == nil {
+		c.startProgress(turn{ID: c.turnID, Status: "inProgress"}, time.Now())
+		p = c.progress
+	}
+	previous := p.followupFrom
+	p.followupFrom = p.liveItems + 1
+	c.dirty = true
+	a.flush()
 	_, err := call[json.RawMessage](a.client, "turn/steer", struct {
 		ThreadID       string  `json:"threadId"`
 		ExpectedTurnID string  `json:"expectedTurnId"`
 		Input          []input `json:"input"`
 	}{c.ID, c.turnID, inputs})
+	if err != nil {
+		p.followupFrom = previous
+		c.dirty = true
+	}
 	// Only retry a rejected request after a completion notification. Transport
 	// failures leave acceptance unknown and must preserve the input for the user.
 	var rejected *rpcError
@@ -1130,13 +1157,17 @@ func (c *conversation) replaceItemTail(start int, items ...*chatItem) {
 	c.itemsByID = nil
 }
 
-func (c *conversation) item(id string) *chatItem {
+func (c *conversation) item(id, kind string) *chatItem {
 	byID := c.itemIndex()
 	if item := byID[id]; item != nil {
 		return item
 	}
-	i := newChatItem(threadItem{ID: id, Type: "agentMessage"}, false)
+	i := newChatItem(threadItem{ID: id, Type: kind}, false)
 	i.progress = c.progress
+	if i.progress != nil {
+		i.progress.liveItems++
+		i.liveOrder = i.progress.liveItems
+	}
 	i.files = c.files
 	c.items = append(c.items, i)
 	byID[id] = i
@@ -1219,34 +1250,38 @@ func (a *agent) onMessage(message envelope) {
 	}
 	switch message.Method {
 	case "item/started", "item/completed":
-		i := c.item(event.Item.ID)
+		i := c.item(event.Item.ID, event.Item.Type)
 		if message.Method == "item/completed" && !(i.complete && i.data.Type == "fileChange" && i.data.Status == "completed") && i.files != nil && !i.files.complete {
 			i.files.add(event.Item)
 		}
 		i.replace(event.Item, message.Method == "item/completed")
 		if event.Item.Type == "userMessage" {
+			if p := i.progress; p != nil && p.followupFrom > 0 {
+				p.followupFrom = max(p.followupFrom, i.liveOrder+1)
+			}
 			c.resolvePastQuestions()
 		}
 		if event.StartedAtMs > 0 {
 			i.sentAt = time.UnixMilli(event.StartedAtMs)
 		}
 		i.setSentAt(time.Now().Unix())
-		if i.progress != nil && i.modelText() {
-			i.progress.received = true
+		if i.modelText() {
+			i.receivedModelOutput()
 		}
 	case "item/agentMessage/delta", "item/plan/delta", "item/reasoning/summaryTextDelta":
-		i := c.item(event.ItemID)
+		i := c.item(event.ItemID, "agentMessage")
 		appendText(&i.text, event.Delta)
 		i.html = ""
-		if c.progress != nil && event.Delta != "" {
-			c.progress.received = true
+		if event.Delta != "" {
+			i.receivedModelOutput()
 		}
 	case "item/reasoning/textDelta":
-		if c.progress != nil && event.Delta != "" {
-			c.progress.received = true
+		if event.Delta != "" {
+			// Raw reasoning counts as output but has no visible text.
+			c.item(event.ItemID, "").receivedModelOutput()
 		}
 	case "item/commandExecution/outputDelta":
-		i := c.item(event.ItemID)
+		i := c.item(event.ItemID, "commandExecution")
 		appendText(&i.output, event.Delta)
 		i.html = ""
 	case "turn/started":

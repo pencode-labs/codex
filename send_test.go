@@ -100,6 +100,65 @@ func TestSteerCompletionRace(t *testing.T) {
 	}
 }
 
+func TestFollowupThinkingBeforeAcknowledgement(t *testing.T) {
+	ui := &capturedUI{}
+	c := &conversation{thread: thread{ID: "thread", Name: "task"}, loaded: true, draft: "补充要求"}
+	a := &agent{selected: c, conversations: map[string]*conversation{c.ID: c}, publisher: ui, workspaceOpen: true}
+	a.client = &rpcClient{ctx: t.Context(), writer: json.NewEncoder(io.Discard), messages: make(chan envelope, 2), handle: a.onMessage}
+	notify := func(method, params string) {
+		a.onMessage(envelope{Method: method, Params: json.RawMessage(params)})
+	}
+	notify("turn/started", `{"threadId":"thread","turn":{"id":"turn","status":"inProgress"}}`)
+	notify("item/completed", `{"threadId":"thread","item":{"id":"first","type":"agentMessage","text":"原回复"}}`)
+	started := c.progress.started
+	submit := command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "submit", Ref: "form"}}}
+	checkThinking := func(view *peb.EditorView, after string) {
+		t.Helper()
+		mark := strings.Index(view.HTML, `aria-label="正在思考"`)
+		if at := strings.Index(view.HTML, `data-ref="message/`+after+`"`); at < 0 || mark < at || strings.Count(view.HTML, `class="codex-turn-progress"`) != 1 {
+			t.Fatal("expected a single thinking indicator below the latest message", view.HTML)
+		}
+	}
+	a.client.messages <- envelope{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread","item":{"id":"extra","type":"userMessage","text":"补充要求"}}`)}
+	a.client.messages <- envelope{ID: json.RawMessage(`1`), Result: json.RawMessage(`{"turnId":"turn"}`)}
+	if err := a.handleCommand(submit); err != nil {
+		t.Fatal(err)
+	}
+	checkThinking(ui.ui.View, "first")
+	if strings.Contains(ui.ui.View.HTML, `data-ref="message/extra"`) {
+		t.Fatal("first paint waited for the server to echo the followup")
+	}
+	notify("item/agentMessage/delta", `{"threadId":"thread","itemId":"first","delta":"迟到的内容"}`)
+	notify("item/started", `{"threadId":"thread","item":{"id":"next","type":"reasoning"}}`)
+	notify("item/reasoning/textDelta", `{"threadId":"thread","itemId":"next","delta":""}`)
+	checkThinking(a.composerView(), "extra")
+	if a.progressVisible() {
+		t.Fatal("timer running while waiting for a followup reply")
+	}
+	notify("item/reasoning/textDelta", `{"threadId":"thread","itemId":"next","delta":"新内容"}`)
+	if view := a.composerView(); strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "已处理") || !a.progressVisible() || c.progress.started != started {
+		t.Fatal("new output did not resume the original turn timer", view.HTML)
+	}
+	c.draft = "再补充一条"
+	a.client.messages <- envelope{ID: json.RawMessage(`2`), Error: &rpcError{Message: "rejected"}}
+	if err := a.handleCommand(submit); err == nil {
+		t.Fatal("expected rejected followup")
+	}
+	checkThinking(ui.ui.View, "extra")
+	if view := a.composerView(); strings.Contains(view.HTML, "正在思考") || c.draft != "再补充一条" {
+		t.Fatal("rejected followup left a pending indicator or lost the draft", view.HTML)
+	}
+	a.client.messages <- envelope{ID: json.RawMessage(`3`), Result: json.RawMessage(`{"turnId":"turn"}`)}
+	if err := a.handleCommand(submit); err != nil {
+		t.Fatal(err)
+	}
+	checkThinking(a.composerView(), "extra")
+	notify("turn/completed", `{"threadId":"thread","turn":{"id":"turn","status":"interrupted","durationMs":12000}}`)
+	if view := a.composerView(); strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "用时 12s") {
+		t.Fatal("interruption left the followup waiting", view.HTML)
+	}
+}
+
 func TestRejectedSteerPreservesDraftAndAttachments(t *testing.T) {
 	a, c, output := asyncQuestionFixture(t)
 	c.Name = "task"
