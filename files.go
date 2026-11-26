@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
-	"html"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -158,18 +158,19 @@ func (a *agent) handleFileEvent(e peb.EditorEvent) error {
 
 func (a *agent) filesView() *peb.EditorView {
 	p := a.filePicker
-	var b strings.Builder
-	b.WriteString(`<section class="codex-files"><form class="codex-file-path" data-ref="file-path-form"><button data-ref="file-parent" type="button" title="上一级目录" aria-label="上一级目录">..</button><input data-ref="file-path" aria-label="文件或目录路径" placeholder="输入文件或目录路径" value="`)
-	b.WriteString(html.EscapeString(p.path))
-	b.WriteString(`"><button type="submit">打开</button></form><p class="codex-muted">选择文件添加到本次消息，也可输入项目外文件的路径。</p>`)
+	b := markup.Acquire()
+	defer b.Release()
+	b.Open("section", "class", "codex-files")
+	b.Open("form", "class", "codex-file-path", "data-ref", "file-path-form")
+	b.TextElement("button", "..", "data-ref", "file-parent", "type", "button", "title", "上一级目录", "aria-label", "上一级目录")
+	b.Element("input", "data-ref", "file-path", "aria-label", "文件或目录路径", "placeholder", "输入文件或目录路径", "value", p.path)
+	b.TextElement("button", "打开", "type", "submit")
+	b.End()
+	b.TextElement("p", "选择文件添加到本次消息，也可输入项目外文件的路径。", "class", "codex-muted")
 	if p.error != "" {
-		b.WriteString(`<p class="codex-status" role="alert">`)
-		b.WriteString(html.EscapeString(p.error))
-		b.WriteString(`</p>`)
+		b.TextElement("p", p.error, "class", "codex-status", "role", "alert")
 	}
-	b.WriteString(`<div class="codex-file-list" data-ref="file-list" data-pencode-scroll="preserve" data-pencode-scroll-key="`)
-	b.WriteString(html.EscapeString(p.directory))
-	b.WriteString(`">`)
+	b.Open("div", "class", "codex-file-list", "data-ref", "file-list", "data-pencode-scroll", "preserve", "data-pencode-scroll-key", p.directory)
 	bindings := make([]peb.EditorBinding, 0, len(p.entries)+3)
 	bindings = append(bindings, peb.EditorBinding{Ref: "file-path-form", Kind: "submit"}, peb.EditorBinding{Ref: "file-path", Kind: "input"}, peb.EditorBinding{Ref: "file-parent", Kind: "click"})
 	for _, directory := range [...]bool{true, false} {
@@ -178,20 +179,19 @@ func (a *agent) filesView() *peb.EditorView {
 				continue
 			}
 			ref := "file/" + strconv.Itoa(index)
-			b.WriteString(`<button data-ref="`)
-			b.WriteString(ref)
-			b.WriteString(`" type="button">`)
-			b.WriteString(html.EscapeString(entry.Name()))
+			b.Open("button", "data-ref", ref, "type", "button")
+			b.Text(entry.Name())
 			if directory {
-				b.WriteByte('/')
+				b.Text("/")
 			}
-			b.WriteString(`</button>`)
+			b.End()
 			bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 		}
 	}
 	if len(p.entries) == 0 {
-		b.WriteString(`<p class="codex-muted">此目录为空。</p>`)
+		b.TextElement("p", "此目录为空。", "class", "codex-muted")
 	}
-	b.WriteString(`</div></section>`)
+	b.End()
+	b.End()
 	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
 }

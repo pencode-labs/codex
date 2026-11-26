@@ -1,7 +1,6 @@
 package main
 
 import (
-	"html"
 	"io"
 	"net/url"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 	"github.com/yuin/goldmark/v2/ast"
 	"github.com/yuin/goldmark/v2/renderer"
@@ -24,7 +24,8 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 	w := writer.(util.BufWriter)
 	if !entering {
 		if node.Kind() == ast.KindLink {
-			_, _ = w.WriteString(`</a>`)
+			_, err := w.WriteString(markup.EndTag("a"))
+			return ast.WalkContinue, err
 		}
 		return ast.WalkContinue, nil
 	}
@@ -38,7 +39,9 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 	links := context.Get(chatMarkdownContext).(*chatMarkdownState)
 	href, icon, directory := chatLinkTarget(destination, links.root)
 	var ref string
-	_, _ = w.WriteString(`<a role="link"`)
+	b := markup.Acquire()
+	defer b.Release()
+	link := b.Open("a", "role", "link")
 	if href != "" {
 		ref = "link/" + links.scope + "/" + strconv.Itoa(links.linkIndex)
 		links.linkIndex++
@@ -46,19 +49,28 @@ func renderChatLink(writer io.Writer, source []byte, node ast.Node, entering boo
 			ref = "directory/" + url.PathEscape(directory) + "/" + ref
 			links.bindings = append(links.bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 		}
-		_, _ = w.WriteString(` class="codex-link" data-ref="` + html.EscapeString(ref) + `" href="` + html.EscapeString(href) + `" title="`)
 		if title == "" {
 			title = destination
 		}
-		_, _ = w.WriteString(html.EscapeString(title) + `"`)
+		link.SetAttr("class", "codex-link")
+		link.SetAttr("data-ref", ref)
+		link.SetAttr("href", href)
+		link.SetAttr("title", title)
 	}
-	_, _ = w.WriteString(`>`)
+	if _, err := w.WriteString(markup.StartTag(link)); err != nil {
+		return ast.WalkStop, err
+	}
 	if href != "" {
-		_, _ = w.WriteString(`<img class="codex-link-icon" data-ref="` + html.EscapeString(ref+"/icon") + `" data-pencode-icon="` + icon + `" alt="" aria-hidden="true">`)
+		iconNode := b.Element("img", "class", "codex-link-icon", "data-ref", ref+"/icon", "data-pencode-icon", icon, "alt", "", "aria-hidden", "true")
+		if _, err := w.WriteString(markup.HTML(iconNode)); err != nil {
+			return ast.WalkStop, err
+		}
 	}
+
 	if n, ok := node.(*ast.AutoLink); ok {
 		_, _ = n.Label.WriteTo(markdownhtml.ContextTextWriter(context), source)
-		_, _ = w.WriteString(`</a>`)
+		_, err := w.WriteString(markup.EndTag("a"))
+		return ast.WalkContinue, err
 	}
 	return ast.WalkContinue, nil
 }
@@ -147,37 +159,43 @@ func (a *agent) openDirectoryLink(encoded string, context peb.ActionContext) err
 
 func directoryView(name string) *peb.EditorView {
 	entries, err := os.ReadDir(name)
-	var b strings.Builder
-	b.WriteString(`<section class="codex-directory"><h2>` + html.EscapeString(filepath.Base(name)) + `</h2><p class="codex-muted">` + html.EscapeString(name) + `</p>`)
+	b := markup.Acquire()
+	defer b.Release()
+	b.Open("section", "class", "codex-directory")
+	b.TextElement("h2", filepath.Base(name))
+	b.TextElement("p", name, "class", "codex-muted")
 	var bindings []peb.EditorBinding
 	if err != nil {
-		b.WriteString(`<p class="codex-status" role="alert">` + html.EscapeString(err.Error()) + `</p>`)
+		b.TextElement("p", err.Error(), "class", "codex-status", "role", "alert")
 	} else {
-		b.WriteString(`<nav aria-label="目录内容">`)
-		bindings = directoryEntry(&b, bindings, filepath.Dir(name), "..", "parent", true)
+		b.Open("nav", "aria-label", "目录内容")
+		bindings = directoryEntry(b, bindings, filepath.Dir(name), "..", "parent", true)
 		for _, directory := range [...]bool{true, false} {
 			for index, entry := range entries {
 				if entry.IsDir() == directory {
-					bindings = directoryEntry(&b, bindings, filepath.Join(name, entry.Name()), entry.Name(), strconv.Itoa(index), directory)
+					bindings = directoryEntry(b, bindings, filepath.Join(name, entry.Name()), entry.Name(), strconv.Itoa(index), directory)
 				}
 			}
 		}
 		if len(entries) == 0 {
-			b.WriteString(`<p class="codex-muted">此目录为空。</p>`)
+			b.TextElement("p", "此目录为空。", "class", "codex-muted")
 		}
-		b.WriteString(`</nav>`)
+		b.End()
 	}
-	b.WriteString(`</section>`)
+	b.End()
 	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
 }
 
-func directoryEntry(b *strings.Builder, bindings []peb.EditorBinding, name, label, ref string, directory bool) []peb.EditorBinding {
+func directoryEntry(b *markup.Builder, bindings []peb.EditorBinding, name, label, ref string, directory bool) []peb.EditorBinding {
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(name)}
 	_, icon, _ := chatLinkTarget(u.String(), "")
 	if directory {
 		ref, icon = "directory/"+url.PathEscape(name)+"/"+ref, "folder"
 		bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 	}
-	b.WriteString(`<button type="button" role="link" class="codex-link" data-ref="` + html.EscapeString(ref) + `" data-pencode-href="` + html.EscapeString(u.String()) + `"><img class="codex-link-icon" data-ref="` + html.EscapeString(ref+"/icon") + `" data-pencode-icon="` + icon + `" alt="" aria-hidden="true">` + html.EscapeString(label) + `</button>`)
+	b.Open("button", "type", "button", "role", "link", "class", "codex-link", "data-ref", ref, "data-pencode-href", u.String())
+	b.Element("img", "class", "codex-link-icon", "data-ref", ref+"/icon", "data-pencode-icon", icon, "alt", "", "aria-hidden", "true")
+	b.Text(label)
+	b.End()
 	return bindings
 }

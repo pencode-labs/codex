@@ -12,6 +12,63 @@ import (
 	"github.com/pencode-labs/pencode/peb"
 )
 
+func TestContinueInterruptedHistory(t *testing.T) {
+	client, output := snapshotClient(t,
+		turnPage{Data: []turn{{ID: "stopped", Status: "interrupted"}}, NextCursor: "older"},
+		turnPage{Data: []turn{{ID: "older", Status: "completed"}}},
+	)
+	c := &conversation{thread: thread{ID: "thread"}, loaded: true}
+	a := &agent{selected: c, client: client}
+	for range 2 {
+		if err := a.readHistory(c); err != nil {
+			t.Fatal(err)
+		}
+		checkComposerAction(t, a.composerView(), "continue")
+	}
+	output.Reset()
+	click := command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "click", Ref: "continue"}}}
+	c.dirty = false
+	a.setDraft("改做另一项任务")
+	if !c.dirty {
+		t.Fatal("typing after stopping must refresh the button")
+	}
+	checkComposerAction(t, a.composerView(), "send")
+	if err := a.handleCommand(click); err != nil || output.Len() != 0 || c.draft != "改做另一项任务" {
+		t.Fatal("stale continue click changed the draft or sent a turn", err)
+	}
+	a.setDraft(" ")
+	a.addAttachment("input.go")
+	checkComposerAction(t, a.composerView(), "send")
+	a.removeAttachment("0")
+	checkComposerAction(t, a.composerView(), "continue")
+	client.messages <- envelope{ID: json.RawMessage(`3`), Error: &rpcError{Message: "rejected"}}
+	if err := a.handleCommand(click); err == nil {
+		t.Fatal("expected rejected continuation")
+	}
+	checkComposerAction(t, a.composerView(), "continue")
+	output.Reset()
+	client.messages <- envelope{ID: json.RawMessage(`4`), Result: json.RawMessage(`{"turn":{"id":"next","status":"inProgress"}}`)}
+	if err := a.handleCommand(click); err != nil {
+		t.Fatal(err)
+	}
+	checkComposerAction(t, a.composerView(), "stop")
+	var request struct {
+		Method string
+		Params struct {
+			ThreadID string
+			Input    json.RawMessage
+		}
+	}
+	if err := json.Unmarshal(output.Bytes(), &request); err != nil || request.Method != "turn/start" || request.Params.ThreadID != c.ID ||
+		string(request.Params.Input) != "[]" {
+		t.Fatal("invalid continuation request", output.String(), err)
+	}
+	output.Reset()
+	if err := a.handleCommand(click); err != nil || output.Len() != 0 {
+		t.Fatal("repeated click sent an additional turn", err)
+	}
+}
+
 func TestRunningComposerSendsFollowups(t *testing.T) {
 	for _, event := range []peb.EditorEvent{{Kind: "submit", Ref: "form"}, {Kind: "click", Ref: "send"}} {
 		t.Run(event.Kind, func(t *testing.T) {
@@ -27,7 +84,7 @@ func TestRunningComposerSendsFollowups(t *testing.T) {
 			a.addAttachment("context.go")
 			view := a.composerView()
 			validateBindings(t, view)
-			checkComposerAction(t, view, false)
+			checkComposerAction(t, view, "send")
 			for attempt := range 2 {
 				a.client.messages <- envelope{ID: json.RawMessage([]byte{'1' + byte(attempt)}), Result: json.RawMessage(`{"turnId":"turn"}`)}
 				if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: event}}); err != nil {
@@ -36,13 +93,13 @@ func TestRunningComposerSendsFollowups(t *testing.T) {
 				if c.draft != "" || !c.busy || c.turnID != "turn" || c.progress != progress || c.files != files || !c.dirty || len(a.images) != 0 || len(a.attachments) != 0 {
 					t.Fatal("steering reset the turn or retained accepted input")
 				}
-				checkComposerAction(t, a.composerView(), true)
+				checkComposerAction(t, a.composerView(), "stop")
 				c.dirty = false
 				a.setDraft("再补充一条")
 				if !c.dirty {
 					t.Fatal("typing did not schedule the send button update")
 				}
-				checkComposerAction(t, a.composerView(), false)
+				checkComposerAction(t, a.composerView(), "send")
 			}
 			decoder := json.NewDecoder(&output)
 			for attempt := range 2 {

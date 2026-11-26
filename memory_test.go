@@ -47,9 +47,9 @@ func TestColdConversationBudgetPreservesLiveState(t *testing.T) {
 		t.Fatal("cold cache exceeded budget or evicted a newer conversation")
 	}
 	// Switching drops the cached full view immediately, including when hidden.
-	a.composerPrefix = strings.Repeat("old transcript", 1000)
+	a.chatPaneHTML = strings.Repeat("old transcript", 1000)
 	a.selectConversation(live)
-	if a.composerPrefix != "" {
+	if a.chatPaneHTML != "" {
 		t.Fatal("switch retained the previous full view")
 	}
 }

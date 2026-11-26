@@ -19,7 +19,7 @@ func TestReasoningSelectionCancellationAndValidation(t *testing.T) {
 	view := a.modelsView()
 	validateBindings(t, view)
 	if strings.Contains(view.HTML, "<Next>") || !strings.Contains(view.HTML, "&lt;Next&gt;") ||
-		strings.Contains(view.HTML, `data-ref="effort/high"`) || !strings.Contains(view.HTML, `data-ref="effort/low" aria-checked="true"`) ||
+		strings.Contains(view.HTML, `data-ref="effort/high"`) || !hasElement(view.HTML, "button", "data-ref", "effort/low", "aria-checked", "true") ||
 		!strings.Contains(view.HTML, ">future-effort</span>") {
 		t.Fatal("efforts did not follow the selected model catalog", view.HTML)
 	}

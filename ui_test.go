@@ -114,10 +114,10 @@ func TestHistoryRefreshRetainsPublishedChat(t *testing.T) {
 	c := &conversation{thread: thread{ID: "active"}, draft: "draft"}
 	a := &agent{selected: c, showHistory: true, history: threadPage{Data: []thread{{ID: "saved", Name: "Saved task"}}}}
 	initial := a.composerView()
-	if !strings.Contains(initial.HTML, `data-ref="transcript" data-pencode-selectable`) {
+	if !hasElement(initial.HTML, "div", "data-ref", "transcript", "data-pencode-selectable", "") {
 		t.Fatal("transcript is not selectable")
 	}
-	prefix := a.composerPrefix
+	prefix := a.chatPaneHTML
 	if err := a.handleCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "input", Ref: "prompt", Value: "draft still being typed"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -125,13 +125,13 @@ func TestHistoryRefreshRetainsPublishedChat(t *testing.T) {
 	a.historyLoading = true
 	loading := a.historyView()
 	validateBindings(t, loading)
-	if !strings.HasPrefix(loading.HTML, prefix) || !strings.Contains(loading.HTML, `disabled aria-busy="true"`) || !strings.Contains(loading.HTML, `class="codex-history-spinning"`) {
+	if !strings.Contains(loading.HTML, prefix) || !hasElement(loading.HTML, "button", "disabled", "", "aria-busy", "true") || !strings.Contains(loading.HTML, `class="codex-history-spinning"`) {
 		t.Fatal("loading history lost the chat or refresh indicator", loading.HTML)
 	}
 	a.historyLoading = false
 	refreshed := a.historyView()
 	validateBindings(t, refreshed)
-	if a.composerPrefix != prefix || !strings.HasPrefix(refreshed.HTML, prefix) || !strings.HasPrefix(initial.HTML, prefix) {
+	if a.chatPaneHTML != prefix || !strings.Contains(refreshed.HTML, prefix) || !strings.Contains(initial.HTML, prefix) {
 		t.Fatal("refresh regenerated the chat and input")
 	}
 	if !strings.Contains(refreshed.HTML, "Updated task") || strings.Contains(refreshed.HTML, "Saved task") || c.draft != "draft still being typed" {

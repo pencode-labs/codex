@@ -1,9 +1,10 @@
 package main
 
 import (
-	"html"
-	"strings"
+	"strconv"
 	"time"
+
+	"github.com/onix-engine/onix/html/markup"
 )
 
 type turnProgress struct {
@@ -93,30 +94,25 @@ func (a *agent) updateProgress(now time.Time) {
 	}
 }
 
-func (p *turnProgress) render(b *strings.Builder, collapsible bool) {
+func (p *turnProgress) render(b *markup.Builder, collapsible bool) {
 	thinking := !p.complete && !p.hasReply()
-	b.WriteString(`<div class="codex-turn-progress" role="status"`)
+	progress := b.Open("div", "class", "codex-turn-progress", "role", "status")
 	if p.id != "" {
-		b.WriteString(` data-ref="progress/`)
-		b.WriteString(html.EscapeString(p.id))
-		b.WriteString(`" data-pencode-region`)
+		progress.SetAttr("data-ref", "progress/"+p.id)
+		progress.SetAttr("data-pencode-region", "")
 	}
 	if thinking {
-		b.WriteString(` aria-label="正在思考"`)
+		progress.SetAttr("aria-label", "正在思考")
 	}
-	b.WriteString(`>`)
 	if collapsible {
 		if p.toggleRef == "" {
 			p.toggleRef = "turn/" + p.id
 		}
-		b.WriteString(`<button class="codex-turn-toggle" type="button" data-ref="`)
-		b.WriteString(html.EscapeString(p.toggleRef))
-		b.WriteString(`" aria-expanded="`)
+		label := "展开历史消息"
 		if p.expanded {
-			b.WriteString(`true" title="收起历史消息" aria-label="收起历史消息">`)
-		} else {
-			b.WriteString(`false" title="展开历史消息" aria-label="展开历史消息">`)
+			label = "收起历史消息"
 		}
+		b.Open("button", "class", "codex-turn-toggle", "type", "button", "data-ref", p.toggleRef, "aria-expanded", strconv.FormatBool(p.expanded), "title", label, "aria-label", label)
 	}
 	if thinking {
 		renderSweepText(b, "正在思考")
@@ -125,25 +121,26 @@ func (p *turnProgress) render(b *strings.Builder, collapsible bool) {
 		if p.complete {
 			label, hours, minutes, unit = "用时 ", "h ", "m ", "s"
 		}
-		b.WriteString(label)
+		b.Text(label)
 		elapsed := p.elapsed
 		if !p.complete {
 			elapsed = max(0, time.Since(p.started))
 		}
 		seconds := int(elapsed / time.Second)
 		if seconds >= 3600 {
-			writeActivityCount(b, seconds/3600)
-			b.WriteString(hours)
+			b.Text(strconv.Itoa(seconds / 3600))
+			b.Text(hours)
 		}
 		if seconds >= 60 {
-			writeActivityCount(b, seconds/60%60)
-			b.WriteString(minutes)
+			b.Text(strconv.Itoa(seconds / 60 % 60))
+			b.Text(minutes)
 		}
-		writeActivityCount(b, seconds%60)
-		b.WriteString(unit)
+		b.Text(strconv.Itoa(seconds % 60))
+		b.Text(unit)
 	}
 	if collapsible {
-		b.WriteString(`<img src="resources/icons/chevron-down.svg" alt=""></button>`)
+		b.Element("img", "src", "resources/icons/chevron-down.svg", "alt", "")
+		b.End()
 	}
-	b.WriteString(`</div>`)
+	b.End()
 }

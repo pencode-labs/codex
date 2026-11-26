@@ -1,8 +1,10 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -17,22 +19,24 @@ type sandboxPolicy struct {
 }
 
 type permissionOption struct {
-	ref, label, description, icon, sandbox string
+	ref, label, title, icon, sandbox string
 	approvalSettings
 	policy sandboxPolicy
 }
 
+const permissionTiming = "；从下一轮任务开始生效"
+
 var permissionOptions = [...]permissionOption{
 	{
-		ref: "permission/ask", label: "请批准", description: "编辑外部文件和使用互联网时始终询问", icon: "hand",
+		ref: "permission/ask", label: "请批准", title: "编辑外部文件和使用互联网时始终询问" + permissionTiming, icon: "resources/icons/hand.svg",
 		sandbox: "workspace-write", approvalSettings: approvalSettings{"on-request", "user"}, policy: sandboxPolicy{Type: "workspaceWrite"},
 	},
 	{
-		ref: "permission/auto", label: "帮我批准", description: "仅对检测到的风险操作请求批准", icon: "shield-check",
+		ref: "permission/auto", label: "帮我批准", title: "仅对检测到的风险操作请求批准" + permissionTiming, icon: "resources/icons/shield-check.svg",
 		sandbox: "workspace-write", approvalSettings: approvalSettings{"on-request", "auto_review"}, policy: sandboxPolicy{Type: "workspaceWrite"},
 	},
 	{
-		ref: "permission/full", label: "完全访问权限", description: "可不受限制地访问互联网和电脑上的任何文件", icon: "shield-alert",
+		ref: "permission/full", label: "完全访问权限", title: "可不受限制地访问互联网和电脑上的任何文件" + permissionTiming, icon: "resources/icons/shield-alert.svg",
 		sandbox: "danger-full-access", approvalSettings: approvalSettings{"never", "user"}, policy: sandboxPolicy{Type: "dangerFullAccess"},
 	},
 }
@@ -105,52 +109,41 @@ func (a *agent) showPermissions() error {
 }
 
 func (a *agent) permissionsView() *peb.EditorView {
-	var b strings.Builder
-	b.WriteString(`<section class="codex-permission-menu" role="menu" aria-label="权限设置"><div class="codex-permission-header"><h3>应如何批准 Codex 操作？</h3><button data-ref="permission-help" class="codex-permission-help" type="button" aria-expanded="`)
+	b := markup.Acquire()
+	defer b.Release()
+	b.Open("section", "class", "codex-permission-menu", "role", "menu", "aria-label", "权限设置")
+	b.Open("div", "class", "codex-permission-header")
+	b.TextElement("h3", "应如何批准 Codex 操作？")
+	label := "了解更多"
 	if a.permissionHelp {
-		b.WriteString(`true">收起说明`)
-	} else {
-		b.WriteString(`false">了解更多`)
+		label = "收起说明"
 	}
-	b.WriteString(`</button></div>`)
+	b.TextElement("button", label, "data-ref", "permission-help", "class", "codex-permission-help", "type", "button", "aria-expanded", strconv.FormatBool(a.permissionHelp))
+	b.End()
 	bindings := make([]peb.EditorBinding, 0, len(permissionOptions)+1)
 	bindings = append(bindings, peb.EditorBinding{Ref: "permission-help", Kind: "click"})
 	for i := range permissionOptions {
 		p := &permissionOptions[i]
-		b.WriteString(`<button class="codex-permission-option`)
+		class, check := "codex-permission-option", "check"
 		if p.sandbox == "danger-full-access" {
-			b.WriteString(` codex-permission-full`)
+			class += " codex-permission-full"
+			check = "check-warning"
 		}
-		b.WriteString(`" type="button" role="menuitemradio" data-ref="`)
-		b.WriteString(p.ref)
-		b.WriteString(`" aria-checked="`)
+		b.Open("button", "class", class, "type", "button", "role", "menuitemradio", "data-ref", p.ref, "aria-checked", strconv.FormatBool(i == a.permissionIndex))
+		b.Element("img", "class", "codex-permission-icon", "src", p.icon, "alt", "")
+		b.Open("span", "class", "codex-permission-copy")
+		b.TextElement("span", p.label, "class", "codex-permission-label")
+		b.TextElement("span", strings.TrimSuffix(p.title, permissionTiming), "class", "codex-permission-description")
+		b.End()
 		if i == a.permissionIndex {
-			b.WriteString("true")
-		} else {
-			b.WriteString("false")
+			b.Element("img", "class", "codex-permission-check", "src", "resources/icons/"+check+".svg", "alt", "")
 		}
-		b.WriteString(`"><img class="codex-permission-icon" src="resources/icons/`)
-		b.WriteString(p.icon)
-		b.WriteString(`.svg" alt=""><span class="codex-permission-copy"><span class="codex-permission-label">`)
-		b.WriteString(p.label)
-		b.WriteString(`</span><span class="codex-permission-description">`)
-		b.WriteString(p.description)
-		b.WriteString(`</span></span>`)
-		if i == a.permissionIndex {
-			b.WriteString(`<img class="codex-permission-check" src="resources/icons/`)
-			if p.sandbox == "danger-full-access" {
-				b.WriteString("check-warning")
-			} else {
-				b.WriteString("check")
-			}
-			b.WriteString(`.svg" alt="">`)
-		}
-		b.WriteString(`</button>`)
+		b.End()
 		bindings = append(bindings, peb.EditorBinding{Ref: p.ref, Kind: "click"})
 	}
 	if a.permissionHelp {
-		b.WriteString(`<p class="codex-permission-explanation">前两档允许在工作区内修改文件和执行命令；外部文件和网络访问分别交由你或 Codex 自动审查。自动审查仍可能拒绝风险操作，并会产生额外用量。完全访问允许直接执行操作。设置从下一轮任务开始生效，不影响正在运行的任务；远程项目的文件和命令权限作用于工作区服务器。</p>`)
+		b.TextElement("p", "前两档允许在工作区内修改文件和执行命令；外部文件和网络访问分别交由你或 Codex 自动审查。自动审查仍可能拒绝风险操作，并会产生额外用量。完全访问允许直接执行操作。设置从下一轮任务开始生效，不影响正在运行的任务；远程项目的文件和命令权限作用于工作区服务器。", "class", "codex-permission-explanation")
 	}
-	b.WriteString(`</section>`)
+	b.End()
 	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
 }

@@ -3,18 +3,18 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"html"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
 // Called only when building a user message's cached HTML.
-func renderQuestionReplies(b *strings.Builder, text string) bool {
+func renderQuestionReplies(b *markup.Builder, text string) bool {
 	payload, ok := strings.CutPrefix(strings.TrimSpace(text), "<send_user_message_question_reply>")
 	if !ok {
 		return false
@@ -36,13 +36,10 @@ func renderQuestionReplies(b *strings.Builder, text string) bool {
 		}
 	}
 	for _, reply := range replies {
-		b.WriteString(`<div class="codex-question-reply"><div class="codex-question-summary" title="`)
-		b.WriteString(html.EscapeString(reply.Question))
-		b.WriteString(`">`)
-		b.WriteString(html.EscapeString(reply.Question))
-		b.WriteString(`</div><div class="codex-text" data-pencode-preserve-whitespace>`)
-		b.WriteString(html.EscapeString(reply.Answer))
-		b.WriteString(`</div></div>`)
+		b.Open("div", "class", "codex-question-reply")
+		b.TextElement("div", reply.Question, "class", "codex-question-summary", "title", reply.Question)
+		b.TextElement("div", reply.Answer, "class", "codex-text", "data-pencode-preserve-whitespace", "")
+		b.End()
 	}
 	return true
 }
@@ -58,56 +55,41 @@ func (i *chatItem) setSentAt(started int64) {
 	}
 }
 
-func (i *chatItem) renderMessageActions(b *strings.Builder) {
-	b.WriteString(`<div class="codex-message-actions">`)
+func (i *chatItem) renderMessageActions(b *markup.Builder) {
+	b.Open("div", "class", "codex-message-actions")
 	if !i.sentAt.IsZero() {
-		b.WriteString(`<span class="codex-message-time" title="`)
-		b.WriteString(i.sentAt.Local().Format("2006-01-02 15:04:05"))
-		b.WriteString(`">`)
-		b.WriteString(i.sentAt.Local().Format("15:04"))
-		b.WriteString(`</span>`)
+		b.TextElement("span", i.sentAt.Local().Format("15:04"), "class", "codex-message-time", "title", i.sentAt.Local().Format("2006-01-02 15:04:05"))
 	}
 	if i.data.ID != "" {
-		b.WriteString(`<button type="button" class="codex-icon-button" data-ref="copy-message/`)
-		b.WriteString(html.EscapeString(i.data.ID))
-		b.WriteString(`" data-pencode-copy="`)
-		b.WriteString(html.EscapeString(i.text.String()))
-		b.WriteString(`" title="复制消息" aria-label="复制消息"><img data-pencode-icon="copy" data-ref="copy-message-icon/`)
-		b.WriteString(html.EscapeString(i.data.ID))
-		b.WriteString(`" src="resources/icons/copy.svg" alt=""></button>`)
+		b.Open("button", "type", "button", "class", "codex-icon-button", "data-ref", "copy-message/"+i.data.ID, "data-pencode-copy", i.text.String(), "title", "复制消息", "aria-label", "复制消息")
+		b.Element("img", "data-pencode-icon", "copy", "data-ref", "copy-message-icon/"+i.data.ID, "src", "resources/icons/copy.svg", "alt", "")
+		b.End()
 		if i.files != nil && i.files.id != "" {
 			ref := "edit-message/" + i.data.ID
-			b.WriteString(`<button type="button" class="codex-icon-button codex-message-edit" data-ref="`)
-			b.WriteString(html.EscapeString(ref))
-			b.WriteString(`" title="编辑消息" aria-label="编辑消息"><img src="resources/icons/pencil.svg" alt=""></button>`)
+			b.Open("button", "type", "button", "class", "codex-icon-button codex-message-edit", "data-ref", ref, "title", "编辑消息", "aria-label", "编辑消息")
+			b.Element("img", "src", "resources/icons/pencil.svg", "alt", "")
+			b.End()
 			i.linkBindings = append(i.linkBindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 		}
 	}
-	b.WriteString(`</div>`)
+	b.End()
 }
 
-func (c *conversation) renderMessageEditor(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
-	b.WriteString(`<section class="codex-message codex-user codex-user-editing" aria-label="编辑消息" data-ref="message/`)
-	b.WriteString(html.EscapeString(c.editing.data.ID))
-	b.WriteString(`" data-pencode-region><form class="codex-user-bubble" data-ref="message-edit-form" data-pencode-focus="message-edit-text"><textarea class="codex-message-editor" data-ref="message-edit-text" data-pencode-autosize data-pencode-submit-on-enter="message-edit-form" data-pencode-caret="`)
-	b.WriteString(strconv.Itoa(utf8.RuneCountInString(c.editing.text.String())))
-	b.WriteByte(':')
-	b.WriteString(strconv.FormatUint(c.editRevision, 10))
-	b.WriteString(`" rows="2" aria-label="编辑消息"`)
+func (c *conversation) renderMessageEditor(b *markup.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
+	b.Open("section", "class", "codex-message codex-user codex-user-editing", "aria-label", "编辑消息", "data-ref", "message/"+c.editing.data.ID, "data-pencode-region", "")
+	b.Open("form", "class", "codex-user-bubble", "data-ref", "message-edit-form", "data-pencode-focus", "message-edit-text")
+	field := b.TextElement("textarea", c.editDraft, "class", "codex-message-editor", "data-ref", "message-edit-text", "data-pencode-autosize", "", "data-pencode-submit-on-enter", "message-edit-form", "data-pencode-caret", strconv.Itoa(utf8.RuneCountInString(c.editing.text.String()))+":"+strconv.FormatUint(c.editRevision, 10), "rows", "2", "aria-label", "编辑消息")
+	b.Open("div", "class", "codex-message-edit-footer")
+	cancel := b.TextElement("button", "取消", "type", "button", "data-ref", "message-edit-cancel")
+	send := b.TextElement("button", "发送", "type", "submit", "class", "codex-message-edit-send")
 	if c.busy {
-		b.WriteString(` disabled`)
+		field.SetAttr("disabled", "")
+		cancel.SetAttr("disabled", "")
+		send.SetAttr("disabled", "")
 	}
-	b.WriteString(`>`)
-	b.WriteString(html.EscapeString(c.editDraft))
-	b.WriteString(`</textarea><div class="codex-message-edit-footer"><button type="button" data-ref="message-edit-cancel"`)
-	if c.busy {
-		b.WriteString(` disabled`)
-	}
-	b.WriteString(`>取消</button><button type="submit" class="codex-message-edit-send"`)
-	if c.busy {
-		b.WriteString(` disabled`)
-	}
-	b.WriteString(`>发送</button></div></form></section>`)
+	b.End()
+	b.End()
+	b.End()
 	return append(bindings, peb.EditorBinding{Ref: "message-edit-text", Kind: "input"}, peb.EditorBinding{Ref: "message-edit-form", Kind: "submit"}, peb.EditorBinding{Ref: "message-edit-cancel", Kind: "click"})
 }
 
@@ -234,6 +216,7 @@ func (a *agent) sendEditedMessage() error {
 		c.replaceItemTail(start, i)
 		i.files, i.progress, i.html = nil, nil, ""
 		c.progress, c.files, c.requests, c.turnID = nil, nil, nil, ""
+		c.interrupted = false
 		c.editInputs, c.editReverted, c.dirty = inputs, true, true
 		c.turnRevision++
 		// Revert replaces the history generation, invalidating old page cursors.

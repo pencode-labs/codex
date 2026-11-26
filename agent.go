@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -127,6 +127,7 @@ type conversation struct {
 	unread                       bool
 	observing                    bool
 	busy, dirty, loaded          bool
+	interrupted                  bool
 	editReverted                 bool
 }
 type threadPage struct {
@@ -171,7 +172,7 @@ type agent struct {
 	model, status                              string
 	executablePath                             string
 	serverURL                                  string
-	composerPrefix                             string
+	chatPaneHTML                               string
 	renameID, renameValue                      string
 	modelError                                 string
 	history                                    threadPage
@@ -278,10 +279,13 @@ func (a *agent) reportError(err error) {
 	if err == nil {
 		return
 	}
+	b := markup.Acquire()
+	defer b.Release()
+	b.TextElement("p", err.Error())
 	fmt.Fprintln(stderrWriter, err)
 	if err := a.publisher.Show(peb.UI{
 		ID: "error", Title: "Codex", Kind: peb.Notification, Severity: peb.NotificationError, Context: a.context,
-		View: &peb.EditorView{HTML: "<p>" + html.EscapeString(err.Error()) + "</p>", CSS: "p { white-space: pre-wrap; }"},
+		View: &peb.EditorView{HTML: b.String(), CSS: "p { white-space: pre-wrap; }"},
 	}); err != nil {
 		fmt.Fprintln(stderrWriter, err)
 	}
@@ -329,7 +333,7 @@ func (a *agent) selectConversation(c *conversation) {
 	a.dismissCompletion()
 	a.completion.dismissed = ""
 	if a.selected != c {
-		a.composerPrefix, a.composerBindings = "", nil
+		a.chatPaneHTML, a.composerBindings = "", nil
 	}
 	a.selected = c
 	if c != nil {
@@ -344,7 +348,7 @@ func (a *agent) selectConversation(c *conversation) {
 func (a *agent) closeWorkspace() error {
 	a.completion = composerCompletion{}
 	a.workspaceOpen, a.revealWorkspace = false, false
-	a.composerPrefix, a.composerBindings = "", nil
+	a.chatPaneHTML, a.composerBindings = "", nil
 	a.trimConversations()
 	return a.closeComposerMenus()
 }
@@ -546,6 +550,13 @@ func (a *agent) handleCommand(cmd command) error {
 			return a.send()
 		case "stop":
 			return a.interrupt(c)
+		case "continue":
+			if a.composerAction() == "continue" {
+				c.cancelEdit()
+				// An empty JSON array starts generation without adding a user message.
+				return a.startTurn(c, []input{})
+			}
+			return nil
 		case "history", "refresh-history":
 			return a.listHistory("")
 		case "add-file":
@@ -834,6 +845,9 @@ func (a *agent) startTurn(c *conversation, inputs []input) error {
 	if err != nil {
 		c.finishProgress(turn{}, time.Now())
 		a.setBusy(c, false)
+		if c.interrupted {
+			c.status = "任务已停止"
+		}
 		c.dirty = true
 		return err
 	}
@@ -843,7 +857,11 @@ func (a *agent) startTurn(c *conversation, inputs []input) error {
 	// Completion of the previous turn can arrive while this start is pending.
 	// Only completion belonging to the returned turn may clear its busy state.
 	progress := c.turnProgress(result.Turn.ID)
-	a.setBusy(c, result.Turn.Status == "inProgress" && (progress == nil || !progress.complete))
+	liveCompletion := progress != nil && progress.complete
+	if !liveCompletion {
+		c.interrupted = result.Turn.Status == "interrupted"
+	}
+	a.setBusy(c, result.Turn.Status == "inProgress" && !liveCompletion)
 	if c.busy {
 		c.turnID = result.Turn.ID
 		c.startProgress(result.Turn, time.Now())
@@ -1024,6 +1042,9 @@ func (a *agent) readHistory(c *conversation) error {
 	}
 	var older []*chatItem
 	byID := c.itemIndex()
+	if c.cursor == "" && c.turnRevision == revision {
+		c.interrupted = len(page.Data) > 0 && page.Data[0].Status == "interrupted"
+	}
 	slices.Reverse(page.Data)
 	if c.observing && c.cursor == "" && len(page.Data) > 0 {
 		latest := &page.Data[len(page.Data)-1]
@@ -1286,6 +1307,7 @@ func (a *agent) onMessage(message envelope) {
 		i.html = ""
 	case "turn/started":
 		c.turnRevision++
+		c.interrupted = false
 		a.setBusy(c, true)
 		c.status = ""
 		c.turnID = event.Turn.ID
@@ -1311,7 +1333,8 @@ func (a *agent) onMessage(message envelope) {
 		if event.Turn.Error != nil {
 			c.status = event.Turn.Error.Message
 		}
-		if event.Turn.Status == "interrupted" {
+		c.interrupted = event.Turn.Status == "interrupted"
+		if c.interrupted {
 			c.status = "任务已停止"
 		}
 	case "serverRequest/resolved":

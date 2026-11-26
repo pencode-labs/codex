@@ -1,7 +1,6 @@
 package main
 
 import (
-	"html"
 	"io/fs"
 	"net/url"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -84,7 +84,7 @@ func (a *agent) draft() string {
 
 func (a *agent) setDraft(value string) {
 	if a.selected != nil {
-		if a.selected.busy && (strings.TrimSpace(a.selected.draft) == "") != (strings.TrimSpace(value) == "") {
+		if (a.selected.busy || a.selected.interrupted) && (strings.TrimSpace(a.selected.draft) == "") != (strings.TrimSpace(value) == "") {
 			a.selected.dirty = true
 		}
 		a.selected.draft = value
@@ -306,35 +306,32 @@ func markdownReference(label, path string) string {
 	return "[" + label + "](" + path + ")"
 }
 
-func (a *agent) renderCompletion(b *strings.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
+func (a *agent) renderCompletion(b *markup.Builder, bindings []peb.EditorBinding) []peb.EditorBinding {
 	p := &a.completion
 	if p.kind == 0 {
 		return bindings
 	}
-	b.WriteString(`<section class="codex-completion" aria-label="输入建议"><div class="codex-completion-heading"><span>`)
+	b.Open("section", "class", "codex-completion", "aria-label", "输入建议")
+	b.Open("div", "class", "codex-completion-heading")
+	b.Open("span")
 	if p.kind == '/' {
-		b.WriteString("技能")
+		b.Text("技能")
 	} else {
-		b.WriteString("项目文件和文件夹")
+		b.Text("项目文件和文件夹")
 	}
-	b.WriteString(`</span><span>↑↓ 选择 · Enter / Tab 确认 · Esc 关闭</span></div><div id="pencode-extension-codex-completion-list" class="codex-completion-list" data-ref="completion-list" data-pencode-region role="listbox" aria-label="输入建议">`)
+	b.End()
+	b.TextElement("span", "↑↓ 选择 · Enter / Tab 确认 · Esc 关闭")
+	b.End()
+	b.Open("div", "id", "pencode-extension-codex-completion-list", "class", "codex-completion-list", "data-ref", "completion-list", "data-pencode-region", "", "role", "listbox", "aria-label", "输入建议")
 	for index, item := range p.items[:p.count] {
 		ref := "completion/" + strconv.Itoa(index)
-		b.WriteString(`<button id="pencode-extension-codex-completion-option-`)
-		b.WriteString(strconv.Itoa(index))
-		b.WriteString(`" type="button" class="codex-completion-item" role="option" data-ref="`)
-		b.WriteString(ref)
-		b.WriteString(`" aria-selected="`)
-		b.WriteString(strconv.FormatBool(index == p.selected))
-		b.WriteString(`">`)
+		b.Open("button", "id", "pencode-extension-codex-completion-option-"+strconv.Itoa(index), "type", "button", "class", "codex-completion-item", "role", "option", "data-ref", ref, "aria-selected", strconv.FormatBool(index == p.selected))
 		if p.kind == '/' {
-			b.WriteString(`<img class="codex-completion-icon" src="resources/icons/layers-2.svg" alt="" aria-hidden="true">`)
+			b.Element("img", "class", "codex-completion-icon", "src", "resources/icons/layers-2.svg", "alt", "", "aria-hidden", "true")
 		}
-		b.WriteString(`<span class="codex-completion-label">`)
-		b.WriteString(html.EscapeString(item.label))
-		b.WriteString(`</span><span class="codex-completion-detail">`)
-		b.WriteString(html.EscapeString(item.detail))
-		b.WriteString(`</span></button>`)
+		b.TextElement("span", item.label, "class", "codex-completion-label")
+		b.TextElement("span", item.detail, "class", "codex-completion-detail")
+		b.End()
 		bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 	}
 	if p.count == 0 {
@@ -348,10 +345,9 @@ func (a *agent) renderCompletion(b *strings.Builder, bindings []peb.EditorBindin
 				message = p.error
 			}
 		}
-		b.WriteString(`<p class="codex-muted" role="status">`)
-		b.WriteString(html.EscapeString(message))
-		b.WriteString(`</p>`)
+		b.TextElement("p", message, "class", "codex-muted", "role", "status")
 	}
-	b.WriteString(`</div></section>`)
+	b.End()
+	b.End()
 	return bindings
 }

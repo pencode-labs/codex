@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -36,7 +37,10 @@ func TestTurnHistoryCompletionAndExpansion(t *testing.T) {
 	notify("turn/completed", `{"threadId":"thread","turn":{"id":"one","status":"completed","durationMs":85000}}`)
 	view = a.composerView()
 	validateBindings(t, view)
-	for _, want := range []string{"用时 1m 25s", "用户任务", "最终回复", "ui.go", `data-ref="turn/one" aria-expanded="false"`} {
+	if !hasElement(view.HTML, "button", "data-ref", "turn/one", "aria-expanded", "false") {
+		t.Fatal("completed turn should be collapsed")
+	}
+	for _, want := range []string{"用时 1m 25s", "用户任务", "最终回复", "ui.go"} {
 		if !strings.Contains(view.HTML, want) {
 			t.Fatalf("completed turn lost %q: %s", want, view.HTML)
 		}
@@ -125,7 +129,7 @@ func TestCompletedTurnDurationFormat(t *testing.T) {
 		{elapsed: time.Minute, want: "用时 1m 0s"},
 		{elapsed: time.Hour + 2*time.Minute + 3*time.Second, want: "用时 1h 2m 3s"},
 	} {
-		var b strings.Builder
+		var b markup.Builder
 		p := turnProgress{complete: true, elapsed: tc.elapsed}
 		p.render(&b, false)
 		if !strings.Contains(b.String(), tc.want) || strings.Contains(b.String(), "已处理") {

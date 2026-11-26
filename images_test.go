@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -103,7 +104,11 @@ func TestImagePreviewDoesNotRemoveDraft(t *testing.T) {
 		t.Fatal("preview must be a centered, host-owned dialog", ui)
 	}
 	validateBindings(t, ui.View)
-	preview, _, ok := strings.Cut(strings.TrimPrefix(ui.View.HTML, `<section class="codex-image-preview"><img src="data:image/png;base64,`), `"`)
+	previewImages := matchingElements(ui.View.HTML, "img", "alt", "图片预览")
+	if len(previewImages) != 1 {
+		t.Fatal("missing preview image")
+	}
+	preview, ok := strings.CutPrefix(previewImages[0].AttrValue("src"), "data:image/png;base64,")
 	data, err := base64.StdEncoding.DecodeString(preview)
 	if !ok || err != nil {
 		t.Fatal("preview did not contain an inline image", err)
@@ -184,7 +189,7 @@ func TestImageDraftMigratesToNewThreadOnFailedSend(t *testing.T) {
 func TestImageMessagesAndInvalidPastes(t *testing.T) {
 	source := testImageURL(t)
 	i := newChatItem(threadItem{Type: "userMessage", Content: []input{{Type: "text", Text: "task"}, {Type: "image", URL: source}}}, true)
-	var b strings.Builder
+	var b markup.Builder
 	i.render(&b, "", "")
 	if !strings.Contains(b.String(), "task") || !strings.Contains(b.String(), `alt="已发送图片"`) || i.data.Content != nil {
 		t.Fatal("message lost image preview or retained large payload")

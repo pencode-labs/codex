@@ -1,13 +1,14 @@
 package main
 
 import (
-	"html"
-	"strings"
+	"strconv"
 	"unicode/utf8"
+
+	"github.com/onix-engine/onix/html/markup"
 )
 
-func renderSweepText(b *strings.Builder, text string) {
-	b.WriteString(`<span class="codex-sweep-text">`)
+func renderSweepText(b *markup.Builder, text string) {
+	b.Open("span", "class", "codex-sweep-text")
 	// Bound retained animation tracks, regardless of the label's length.
 	width := (utf8.RuneCountInString(text) + 15) / 16
 	for band := 0; text != ""; band++ {
@@ -19,12 +20,8 @@ func renderSweepText(b *strings.Builder, text string) {
 			_, size := utf8.DecodeRuneInString(text[end:])
 			end += size
 		}
-		b.WriteString(`<span style="animation-delay:`)
-		writeActivityCount(b, band*65)
-		b.WriteString(`ms">`)
-		b.WriteString(html.EscapeString(text[:end]))
-		b.WriteString(`</span>`)
+		b.TextElement("span", text[:end], "style", "animation-delay:"+strconv.Itoa(band*65)+"ms")
 		text = text[end:]
 	}
-	b.WriteString(`</span>`)
+	b.End()
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -186,12 +185,10 @@ func testSharedSessionSurvivesClientCloseAndReconnect(t *testing.T, transport st
 	if a.selected.busy || b.selected.busy {
 		t.Fatal("explicit stop did not reach both views")
 	}
-	b.selected.draft = "continue"
+	checkComposerAction(t, b.composerView(), "continue")
 	var published capturedUI
 	b.publisher = &published
-	if err := b.send(); err != nil {
-		t.Fatal(err)
-	}
+	questionEvent(t, b, "continue", "click", "")
 	syncEvents(a)
 	mutex.Lock()
 	started, stopped := starts, interrupts
@@ -254,25 +251,37 @@ func TestLiveSharedAppServer(t *testing.T) {
 
 func TestLiveSharedRunningTurn(t *testing.T) {
 	liveCodexHome(t)
-	release := make(chan struct{})
-	requested := make(chan struct{}, 1)
+	release := make(chan struct{}, 1)
+	requested := make(chan json.RawMessage, 1)
 	inferenceEnded := make(chan struct{}, 1)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = io.Copy(io.Discard, r.Body)
+		var request struct {
+			Generate *bool           `json:"generate"`
+			Input    json.RawMessage `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		emit := func(value any) {
 			data, _ := json.Marshal(value)
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			w.(http.Flusher).Flush()
 		}
+		if request.Generate != nil && !*request.Generate {
+			emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": "warmup", "status": "completed", "output": []any{}}})
+			return
+		}
 		emit(map[string]any{"type": "response.created", "response": map[string]any{"id": "local-response", "status": "in_progress", "output": []any{}}})
-		requested <- struct{}{}
+		requested <- request.Input
 		select {
 		case <-release:
+			emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]any{"type": "message", "id": "reply", "role": "assistant", "phase": "final_answer", "content": []map[string]string{{"type": "output_text", "text": "Continued reply"}}}})
 			emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": "local-response", "status": "completed", "output": []any{}, "usage": map[string]int{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}})
 		case <-r.Context().Done():
 		}
@@ -327,5 +336,47 @@ func TestLiveSharedRunningTurn(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("explicit stop did not cancel the local provider request")
 	}
-	t.Log("shared daemon retained an active local mock turn across view close; explicit stop cancelled it; no OpenAI request")
+	waitFor := func(done func() bool) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for !done() {
+			select {
+			case event, ok := <-b.client.messages:
+				if !ok {
+					t.Fatal("app-server disconnected", b.client.err)
+				}
+				b.onMessage(event)
+			case <-deadline:
+				t.Fatal("app-server did not report the expected turn state")
+			}
+		}
+	}
+	waitFor(func() bool { return b.selected.interrupted })
+	checkComposerAction(t, b.composerView(), "continue")
+	b.publisher = &capturedUI{}
+	questionEvent(t, b, "continue", "click", "")
+	select {
+	case continuation := <-requested:
+		if !strings.Contains(string(continuation), "local fixture") {
+			t.Fatal("continuation lost the original prompt")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("continue did not reach the local provider")
+	}
+	if b.selected.ID != c.ID || b.selected.turnID == started.Turn.ID {
+		t.Fatal("continue must start a new turn on the original thread")
+	}
+	checkComposerAction(t, b.composerView(), "stop")
+	release <- struct{}{}
+	waitFor(func() bool { return !b.selected.busy })
+	if err = a.resume(c.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, client := range []*agent{b, a} {
+		view := client.composerView()
+		checkComposerAction(t, view, "send")
+		if strings.Count(view.HTML, `class="codex-message codex-user"`) != 1 || !strings.Contains(view.HTML, "local fixture") || !strings.Contains(view.HTML, "Continued reply") {
+			t.Fatal("expected only the original user message and the continued reply", view.HTML)
+		}
+	}
 }

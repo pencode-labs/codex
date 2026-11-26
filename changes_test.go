@@ -11,6 +11,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -161,7 +162,7 @@ func TestDiffHighlighting(t *testing.T) {
 		{"empty", "", "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var b strings.Builder
+			var b markup.Builder
 			renderDiff(&b, tc.text, tc.kind)
 			for _, want := range tc.want {
 				if !strings.Contains(b.String(), want) {
@@ -378,7 +379,7 @@ func TestLiveFileChangesUseNativeDiffLinks(t *testing.T) {
 			t.Fatal("extension click binding intercepts native navigation", binding)
 		}
 	}
-	if strings.Count(view.HTML, `role="link" class="codex-live-change"`) != 3 || strings.Contains(view.HTML, "<pre>") {
+	if len(matchingElements(view.HTML, "button", "role", "link", "class", "codex-live-change")) != 3 || strings.Contains(view.HTML, "<pre>") {
 		t.Fatal("live files must remain compact native links", view.HTML)
 	}
 	if allocations := testing.AllocsPerRun(100, f.prepareLive); allocations != 0 {

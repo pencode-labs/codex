@@ -295,7 +295,8 @@ func TestCompletionRejectsChangedSelectionAndEscapesNames(t *testing.T) {
 	a.completion.items[0] = composerCandidate{label: `<script>`, detail: `" onmouseover="bad`}
 	view := a.composerView()
 	validateBindings(t, view)
-	if strings.Contains(view.HTML, "<script>") || !strings.Contains(view.HTML, "&lt;script&gt;") || !strings.Contains(view.HTML, "&#34;") {
+	detail := matchingElements(view.HTML, "span", "class", "codex-completion-detail")
+	if hasElement(view.HTML, "script") || !strings.Contains(view.HTML, "&lt;script&gt;") || len(detail) != 1 || len(detail[0].Children) != 1 || detail[0].Children[0].Data != a.completion.items[0].detail {
 		t.Fatal("completion names were not escaped", view.HTML)
 	}
 	a.selectConversation(&conversation{})

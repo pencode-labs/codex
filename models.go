@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"html"
+	"strconv"
 	"strings"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -214,31 +215,23 @@ func (a *agent) showModels() error {
 }
 
 func (a *agent) modelsView() *peb.EditorView {
-	var b strings.Builder
-	b.WriteString(`<section class="codex-model-menu" role="menu" aria-label="模型与推理强度">`)
+	b := markup.Acquire()
+	defer b.Release()
+	b.Open("section", "class", "codex-model-menu", "role", "menu", "aria-label", "模型与推理强度")
 	bindings := make([]peb.EditorBinding, 0, len(a.models)+2)
 	row := func(ref, label string, selected bool) {
-		b.WriteString(`<button type="button" role="menuitemradio" data-ref="`)
-		b.WriteString(html.EscapeString(ref))
-		b.WriteString(`" aria-checked="`)
+		b.Open("button", "type", "button", "role", "menuitemradio", "data-ref", ref, "aria-checked", strconv.FormatBool(selected))
+		b.TextElement("span", label)
 		if selected {
-			b.WriteString("true")
-		} else {
-			b.WriteString("false")
+			b.Element("img", "src", "resources/icons/check.svg", "alt", "")
 		}
-		b.WriteString(`"><span>`)
-		b.WriteString(html.EscapeString(label))
-		b.WriteString(`</span>`)
-		if selected {
-			b.WriteString(`<img src="resources/icons/check.svg" alt="">`)
-		}
-		b.WriteString(`</button>`)
+		b.End()
 		bindings = append(bindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 	}
 	if m := a.findModel(a.pendingModel); a.pendingModel != "" && m != nil {
-		b.WriteString(`<button type="button" role="menuitem" data-ref="models-back">返回模型列表</button><h3>选择推理强度</h3><p class="codex-model-group">`)
-		b.WriteString(html.EscapeString(m.label()))
-		b.WriteString(`</p>`)
+		b.TextElement("button", "返回模型列表", "type", "button", "role", "menuitem", "data-ref", "models-back")
+		b.TextElement("h3", "选择推理强度")
+		b.TextElement("p", m.label(), "class", "codex-model-group")
 		bindings = append(bindings, peb.EditorBinding{Ref: "models-back", Kind: "click"})
 		selected := m.DefaultReasoningEffort
 		if m.Model == a.model && a.effort != "" {
@@ -249,26 +242,25 @@ func (a *agent) modelsView() *peb.EditorView {
 				row("effort/"+option.ReasoningEffort, effortLabel(option.ReasoningEffort), selected == option.ReasoningEffort)
 			}
 		}
-		b.WriteString(`</section>`)
+		b.End()
 		return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
 	}
-	b.WriteString(`<h3>选择模型</h3>`)
+	b.TextElement("h3", "选择模型")
 	row("model-default", "默认", a.model == "")
-	b.WriteString(`<p class="codex-model-group">推荐模型集</p>`)
+	b.TextElement("p", "推荐模型集", "class", "codex-model-group")
 	for _, m := range a.models {
 		row("model/"+m.Model, m.label(), a.model == m.Model)
 	}
 	switch {
 	case a.modelError != "":
-		b.WriteString(`<p class="codex-model-message" role="status">`)
-		b.WriteString(html.EscapeString(a.modelError))
-		b.WriteString(`</p><button type="button" data-ref="retry-models">重新加载</button>`)
+		b.TextElement("p", a.modelError, "class", "codex-model-message", "role", "status")
+		b.TextElement("button", "重新加载", "type", "button", "data-ref", "retry-models")
 		bindings = append(bindings, peb.EditorBinding{Ref: "retry-models", Kind: "click"})
 	case !a.modelsLoaded:
-		b.WriteString(`<p class="codex-model-message" role="status">正在加载模型…</p>`)
+		b.TextElement("p", "正在加载模型…", "class", "codex-model-message", "role", "status")
 	case len(a.models) == 0:
-		b.WriteString(`<p class="codex-model-message" role="status">暂无可用模型</p>`)
+		b.TextElement("p", "暂无可用模型", "class", "codex-model-message", "role", "status")
 	}
-	b.WriteString(`</section>`)
+	b.End()
 	return &peb.EditorView{HTML: b.String(), CSS: chatCSS, Events: bindings}
 }

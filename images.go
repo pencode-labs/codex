@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"html"
 	"image"
 	_ "image/jpeg"
 	"image/png"
@@ -12,32 +11,29 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
 type imageAttachment struct{ url, preview string }
 
-func (i *chatItem) renderImages(b *strings.Builder) {
+func (i *chatItem) renderImages(b *markup.Builder) {
 	if len(i.images) == 0 {
 		return
 	}
-	b.WriteString(`<div class="codex-message-images" aria-label="消息图片">`)
+	b.Open("div", "class", "codex-message-images", "aria-label", "消息图片")
 	for index, image := range i.images {
 		if image.preview == "" {
-			b.WriteString(`<span class="codex-muted">[图片]</span>`)
+			b.TextElement("span", "[图片]", "class", "codex-muted")
 			continue
 		}
 		ref := "preview-message-image/" + strconv.Itoa(index) + "/" + i.data.ID
-		b.WriteString(`<button class="codex-message-image" type="button" data-ref="`)
-		b.WriteString(html.EscapeString(ref))
-		b.WriteString(`" title="预览图片" aria-haspopup="dialog" aria-label="预览已发送图片 `)
-		b.WriteString(strconv.Itoa(index + 1))
-		b.WriteString(`"><img src="`)
-		b.WriteString(image.preview)
-		b.WriteString(`" alt="已发送图片"></button>`)
+		b.Open("button", "class", "codex-message-image", "type", "button", "data-ref", ref, "title", "预览图片", "aria-haspopup", "dialog", "aria-label", "预览已发送图片 "+strconv.Itoa(index+1))
+		b.Element("img", "src", image.preview, "alt", "已发送图片")
+		b.End()
 		i.linkBindings = append(i.linkBindings, peb.EditorBinding{Ref: ref, Kind: "click"})
 	}
-	b.WriteString(`</div>`)
+	b.End()
 }
 
 func imagePreview(source string, limit int) (string, error) {
@@ -127,11 +123,16 @@ func (a *agent) showImagePreview(preview string) error {
 	if err := a.closeComposerMenus(); err != nil {
 		return err
 	}
+	b := markup.Acquire()
+	defer b.Release()
+	b.Open("section", "class", "codex-image-preview")
+	b.Element("img", "src", preview, "alt", "图片预览")
+	b.End()
 	return a.publisher.Show(peb.UI{
 		ID: "image-preview", Title: "图片预览", Kind: peb.Dialog, Context: a.context,
 		Placement: peb.UIPlacement{Width: 800},
 		View: &peb.EditorView{
-			HTML: `<section class="codex-image-preview"><img src="` + preview + `" alt="图片预览"></section>`,
+			HTML: b.String(),
 			CSS:  chatCSS,
 		},
 	})

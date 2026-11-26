@@ -11,6 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"github.com/onix-engine/onix/html/markup"
+	"github.com/onix-engine/onix/html/parse"
+	"github.com/onix-engine/onix/scene/node"
 	"slices"
 	"strings"
 	"testing"
@@ -482,7 +486,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		write(peb.UIRequest, id, data)
 	}
 	var views peb.ViewReceiver
-	waitUI := func(surface, contains string) peb.UI {
+	waitUI := func(surface, contains string, attrs ...string) peb.UI {
 		t.Helper()
 		deadline := time.After(10 * time.Second)
 		for {
@@ -513,7 +517,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 				if ui.View != nil {
 					validateBindings(t, ui.View)
 				}
-				if ui.ID == surface && (contains == "" || ui.View != nil && strings.Contains(ui.View.HTML, contains)) {
+				if ui.ID == surface && (contains == "" || ui.View != nil && strings.Contains(ui.View.HTML, contains)) && (len(attrs) == 0 || ui.View != nil && hasElement(ui.View.HTML, "button", attrs...)) {
 					return ui
 				}
 			case <-deadline:
@@ -576,13 +580,13 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	addFile(attachment)
 	event("composer", "click", "permission-settings", "")
 	permissions := waitUI("permissions", "完全访问权限")
-	if permissions.Kind != peb.ContextMenu || permissions.Anchor != "ui:composer#permission-settings" || permissions.Placement.Mode != peb.PositionAnchorAbove || !strings.Contains(permissions.View.HTML, `data-ref="permission/ask" aria-checked="true"`) {
+	if permissions.Kind != peb.ContextMenu || permissions.Anchor != "ui:composer#permission-settings" || permissions.Placement.Mode != peb.PositionAnchorAbove || !hasElement(permissions.View.HTML, "button", "data-ref", "permission/ask", "aria-checked", "true") {
 		t.Fatal("wrong permission menu or default", permissions)
 	}
 	event("permissions", "click", "permission-help", "")
 	waitUI("permissions", "设置从下一轮任务开始生效")
 	event("permissions", "close", "", "")
-	waitUI("composer", `aria-label="权限设置" aria-expanded="false"`)
+	waitUI("composer", "", "aria-label", "权限设置", "aria-expanded", "false")
 	event("composer", "click", "model-settings", "")
 	menu := waitUI("models", "Fixture Luna")
 	if menu.Kind != peb.ContextMenu || menu.Anchor != "ui:composer#model-settings" || menu.Placement.Mode != peb.PositionAnchorAbove || strings.Contains(menu.View.HTML, "hidden-model") {
@@ -590,18 +594,18 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	}
 	event("models", "click", "model/fixture-luna", "")
 	menu = waitUI("models", "选择推理强度")
-	if !strings.Contains(menu.View.HTML, `data-ref="effort/medium" aria-checked="true"`) {
+	if !hasElement(menu.View.HTML, "button", "data-ref", "effort/medium", "aria-checked", "true") {
 		t.Fatal("model default effort not marked", menu.View.HTML)
 	}
 	event("models", "click", "models-back", "")
 	menu = waitUI("models", "推荐模型集")
-	if !strings.Contains(menu.View.HTML, `data-ref="model-default" aria-checked="true"`) {
+	if !hasElement(menu.View.HTML, "button", "data-ref", "model-default", "aria-checked", "true") {
 		t.Fatal("going back applied the pending model", menu.View.HTML)
 	}
 	event("models", "click", "model/fixture-luna", "")
 	waitUI("models", "选择推理强度")
 	event("models", "close", "", "")
-	if ui := waitUI("composer", `aria-label="选择模型" aria-expanded="false"`); !strings.Contains(ui.View.HTML, "><span>默认</span>") {
+	if ui := waitUI("composer", "", "aria-label", "选择模型", "aria-expanded", "false"); !strings.Contains(ui.View.HTML, "><span>默认</span>") {
 		t.Fatal("closing effort selection applied the pending model", ui.View.HTML)
 	}
 	event("composer", "click", "model-settings", "")
@@ -619,7 +623,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	// Reopening uses the cached paginated catalog, and default clears the override.
 	event("composer", "click", "model-settings", "")
 	menu = waitUI("models", "Fixture Luna")
-	if !strings.Contains(menu.View.HTML, `data-ref="model/fixture-luna" aria-checked="true"`) {
+	if !hasElement(menu.View.HTML, "button", "data-ref", "model/fixture-luna", "aria-checked", "true") {
 		t.Fatal("selected model not marked")
 	}
 	event("models", "click", "model-default", "")
@@ -627,12 +631,12 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("composer", "click", "model-settings", "")
 	waitUI("models", "Fixture Luna")
 	event("models", "close", "", "")
-	waitUI("composer", `aria-label="选择模型" aria-expanded="false"`)
+	waitUI("composer", "", "aria-label", "选择模型", "aria-expanded", "false")
 	event("composer", "click", "model-settings", "")
 	waitUI("models", "Fixture Luna")
 	event("models", "click", "model/fixture-luna", "")
 	menu = waitUI("models", "选择推理强度")
-	if !strings.Contains(menu.View.HTML, `data-ref="effort/medium" aria-checked="true"`) {
+	if !hasElement(menu.View.HTML, "button", "data-ref", "effort/medium", "aria-checked", "true") {
 		t.Fatal("model default effort not marked", menu.View.HTML)
 	}
 	event("models", "click", "effort/high", "")
@@ -644,11 +648,11 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		t.Fatal("tab must show processing before turn acknowledgement")
 	}
 	firstPaint := firstUpdate.View
-	checkComposerAction(t, firstPaint, false)
+	checkComposerAction(t, firstPaint, "send")
 	if !strings.Contains(firstPaint.HTML, "正在思考") {
 		t.Fatal("first paint must show thinking before turn acknowledgement", firstPaint.HTML)
 	}
-	if !strings.Contains(firstPaint.HTML, `data-ref="history/thread1" aria-current="true">Codex 新会话</button>`) {
+	if !hasElement(firstPaint.HTML, "button", "data-ref", "history/thread1", "aria-current", "true") || !strings.Contains(firstPaint.HTML, ">Codex 新会话</button>") {
 		t.Fatal("new conversation missing from history before turn acknowledgement", firstPaint.HTML)
 	}
 	if ui := waitUI("composer", "fixture approval"); ui.Kind != peb.EditorTab || ui.Title == "implement feature" {
@@ -663,7 +667,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if ui.Busy {
 		t.Fatal("completed turn retained the tab processing icon")
 	}
-	checkComposerAction(t, ui.View, false)
+	checkComposerAction(t, ui.View, "send")
 	if strings.Contains(ui.View.HTML, "tests passed") {
 		t.Fatal("command details should start collapsed", ui.View.HTML)
 	}
@@ -698,14 +702,14 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("composer", "click", "turn/turn1", "")
 	waitUI("composer", `data-ref="activity/cmd"`)
 	event("composer", "click", "activity/cmd", "")
-	waitUI("composer", `data-ref="item/cmd" aria-expanded="false"`)
+	waitUI("composer", "", "data-ref", "item/cmd", "aria-expanded", "false")
 	event("composer", "click", "item/cmd", "")
 	ui = waitUI("composer", "tests passed")
 	if !strings.Contains(ui.View.HTML, "tests passed") || !strings.Contains(ui.View.HTML, "<strong>Final reply</strong> accept") || strings.Contains(ui.View.HTML, "Streamed reply") {
 		t.Fatal("completed items did not replace streamed content", ui.View.HTML)
 	}
 	event("composer", "click", "item/cmd", "")
-	ui = waitUI("composer", `data-ref="item/cmd" aria-expanded="false"`)
+	ui = waitUI("composer", "", "data-ref", "item/cmd", "aria-expanded", "false")
 	if strings.Contains(ui.View.HTML, "tests passed") {
 		t.Fatal("command details did not collapse", ui.View.HTML)
 	}
@@ -713,7 +717,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	waitUI("models", "Fixture Luna")
 	event("models", "click", "model/fixture-luna", "")
 	menu = waitUI("models", "选择推理强度")
-	if !strings.Contains(menu.View.HTML, `data-ref="effort/high" aria-checked="true"`) {
+	if !hasElement(menu.View.HTML, "button", "data-ref", "effort/high", "aria-checked", "true") {
 		t.Fatal("saved effort not marked", menu.View.HTML)
 	}
 	event("models", "click", "effort/low", "")
@@ -737,19 +741,19 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	waitUI("models", "") // Opening permissions closes the model menu.
 	waitUI("permissions", "完全访问权限")
 	event("permissions", "click", "permission/auto", "")
-	if ui := waitUI("composer", "帮我批准"); !strings.Contains(ui.View.HTML, ">wait</textarea>") || !strings.Contains(ui.View.HTML, `aria-label="选择模型" aria-expanded="false"`) {
+	if ui := waitUI("composer", "帮我批准"); !strings.Contains(ui.View.HTML, ">wait</textarea>") || !hasElement(ui.View.HTML, "button", "aria-label", "选择模型", "aria-expanded", "false") {
 		t.Fatal("permission selection lost the draft or left models open", ui.View.HTML)
 	}
 	event("composer", "click", "send", "")
 	ui = waitUI("composer", "Thread permissions: on-request/auto_review/workspace-write; Turn permissions: on-request/auto_review/workspaceWrite; network=false; Effort: low")
-	checkComposerAction(t, ui.View, true)
+	checkComposerAction(t, ui.View, "stop")
 	// Changing the preset while busy applies only to the next turn.
 	event("composer", "click", "permission-settings", "")
-	waitUI("permissions", `data-ref="permission/auto" aria-checked="true"`)
+	waitUI("permissions", "", "data-ref", "permission/auto", "aria-checked", "true")
 	event("permissions", "click", "permission/full", "")
 	waitUI("composer", "完全访问</span>")
 	event("composer", "click", "stop", "")
-	checkComposerAction(t, waitUI("composer", "任务已停止").View, false)
+	checkComposerAction(t, waitUI("composer", "任务已停止").View, "continue")
 	event("composer", "close", "", "")
 	action()
 	waitUI("composer", "给 Codex 的任务")
@@ -763,7 +767,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	}
 	event("composer", "input", "prompt", "draft while history loads")
 	event("composer", "click", "refresh-history", "")
-	if ui := waitUI("composer", `class="codex-history-spinning"`); !strings.Contains(ui.View.HTML, `disabled aria-busy="true"`) || !strings.Contains(ui.View.HTML, "Stored conversation") {
+	if ui := waitUI("composer", `class="codex-history-spinning"`); !hasElement(ui.View.HTML, "button", "disabled", "", "aria-busy", "true") || !strings.Contains(ui.View.HTML, "Stored conversation") {
 		t.Fatal("pending refresh did not retain the chat and show loading", ui)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -805,7 +809,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if strings.Contains(ui.View.HTML, "fixture failure") {
 		t.Fatal("failed request leaked into the composer", ui.View.HTML)
 	}
-	checkComposerAction(t, ui.View, false)
+	checkComposerAction(t, ui.View, "send")
 	if !strings.Contains(ui.View.HTML, "Thread permissions: never/user/danger-full-access; Turn permissions: never/user/dangerFullAccess") {
 		t.Fatal("resumed turn lost full access", ui.View.HTML)
 	}
@@ -821,14 +825,14 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	}
 	// Downgrading a loaded conversation must replace its full-access turn policy.
 	event("composer", "click", "permission-settings", "")
-	waitUI("permissions", `data-ref="permission/full" aria-checked="true"`)
+	waitUI("permissions", "", "data-ref", "permission/full", "aria-checked", "true")
 	event("permissions", "click", "permission/ask", "")
 	waitUI("composer", "请批准</span>")
 	event("composer", "input", "prompt", "wait")
 	event("composer", "click", "send", "")
 	waitUI("composer", "Thread permissions: never/user/danger-full-access; Turn permissions: on-request/user/workspaceWrite; network=false; Effort: low")
 	event("composer", "click", "stop", "")
-	checkComposerAction(t, waitUI("composer", "任务已停止").View, false)
+	checkComposerAction(t, waitUI("composer", "任务已停止").View, "continue")
 	// Full access also reaches newly created threads, not only resumed ones.
 	event("composer", "click", "new", "")
 	waitUI("composer", "新会话")
@@ -848,8 +852,8 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	// A new conversation keeps the previous task running in the background.
 	event("composer", "input", "prompt", "running tab draft")
 	running := waitUI("composer", "running tab draft")
-	match := regexp.MustCompile(`data-ref="history/([^" ]+)" aria-current="true"`).FindStringSubmatch(running.View.HTML)
-	if len(match) != 2 {
+	current := matchingElements(running.View.HTML, "button", "class", "codex-history-row", "aria-current", "true")
+	if len(current) != 1 {
 		t.Fatal("running conversation is missing from history")
 	}
 	event("composer", "click", "new", "")
@@ -862,7 +866,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("composer", "visibilitychange", "", "hidden")
 	waitUI("permissions", "")
 	event("composer", "visibilitychange", "", "visible")
-	event("composer", "click", "history/"+match[1], "")
+	event("composer", "click", current[0].AttrValue("data-ref"), "")
 	if running := waitUI("composer", "running tab draft"); !running.Busy {
 		t.Fatal("new session interrupted the original task", running)
 	}
@@ -919,15 +923,42 @@ func TestAgentPEBWorkflow(t *testing.T) {
 
 var refPattern = regexp.MustCompile(`data-ref="([^"]+)"`)
 
-func checkComposerAction(t *testing.T, view *peb.EditorView, stopping bool) {
-	t.Helper()
-	ref, icon, other := "send", "arrow-up", "stop"
-	if stopping {
-		ref, icon, other = "stop", "square", "send"
+// Match the authored element and its attributes independently of serialization order.
+func matchingElements(source, tag string, attrs ...string) []*node.Node {
+	root, err := parse.ParseTree(source)
+	if err != nil {
+		return nil
 	}
-	if !strings.Contains(view.HTML, `data-ref="`+ref+`" class="codex-icon-button codex-send"`) ||
-		!strings.Contains(view.HTML, `src="resources/icons/`+icon+`.svg"`) || strings.Contains(view.HTML, `data-ref="`+other+`"`) {
-		t.Fatalf("wrong composer action for stopping=%t: %s", stopping, view.HTML)
+	var found []*node.Node
+	var walk func(*node.Node)
+	walk = func(n *node.Node) {
+		match := n.Type == node.ElementNode && n.Data == tag
+		for i := 0; match && i < len(attrs); i += 2 {
+			value, ok := n.Attr(attrs[i])
+			match = ok && value == attrs[i+1]
+		}
+		if match {
+			found = append(found, n)
+		}
+		for _, child := range n.Children {
+			walk(child)
+		}
+	}
+	walk(root)
+	return found
+}
+
+func hasElement(source, tag string, attrs ...string) bool {
+	return len(matchingElements(source, tag, attrs...)) != 0
+}
+
+func checkComposerAction(t *testing.T, view *peb.EditorView, ref string) {
+	t.Helper()
+	icon := map[string]string{"send": "arrow-up", "stop": "square", "continue": "play"}[ref]
+	if strings.Count(view.HTML, `class="codex-icon-button codex-send"`) != 1 ||
+		!hasElement(view.HTML, "button", "data-ref", ref, "class", "codex-icon-button codex-send") ||
+		!strings.Contains(view.HTML, `src="resources/icons/`+icon+`.svg"`) {
+		t.Fatalf("expected composer action %s: %s", ref, view.HTML)
 	}
 	for _, binding := range view.Events {
 		if binding.Ref == ref && binding.Kind == "click" {
@@ -1041,7 +1072,7 @@ func TestHistoryRetainsNewThreadsAndDeduplicatesPages(t *testing.T) {
 }
 
 func TestMarkdownIsEscapedAndDoesNotLoadImages(t *testing.T) {
-	var b strings.Builder
+	var b markup.Builder
 	renderMarkdown(&b, "**safe**\n\n<script>alert(1)</script>\n\n![secret](https://example.com/secret)\n\nafter image", chatMarkdownState{scope: "test"})
 	if !strings.Contains(b.String(), "<strong>safe</strong>") || strings.Contains(b.String(), "<script>") || strings.Contains(b.String(), "<img") || !strings.Contains(b.String(), "after image") {
 		t.Fatal(b.String())

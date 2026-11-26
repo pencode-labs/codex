@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -51,12 +52,12 @@ func TestQuestionReplyMessage(t *testing.T) {
 }
 
 func TestQuestionRepliesEscapeTextAndPreserveAnswerWhitespace(t *testing.T) {
-	var b strings.Builder
+	var b markup.Builder
 	if !renderQuestionReplies(&b, " \n<send_user_message_question_reply>"+`[{"question":"<question> \"one\"","answer":"  <answer>\n**literal**  "},{"question":"第二问","answer":"第二答"}]`+"</send_user_message_question_reply>\n ") {
 		t.Fatal("valid replies were not recognized")
 	}
 	result := b.String()
-	if strings.Count(result, `class="codex-question-reply"`) != 2 || !strings.Contains(result, `title="&lt;question&gt; &#34;one&#34;"`) || !strings.Contains(result, ">  &lt;answer&gt;\n**literal**  </div>") || strings.Index(result, "第二问") > strings.Index(result, "第二答") {
+	if strings.Count(result, `class="codex-question-reply"`) != 2 || !strings.Contains(result, `title="&lt;question&gt; &quot;one&quot;"`) || !strings.Contains(result, ">  &lt;answer&gt;\n**literal**  </div>") || strings.Index(result, "第二问") > strings.Index(result, "第二答") {
 		t.Fatal("replies lost escaping, whitespace or order", result)
 	}
 }
@@ -64,8 +65,8 @@ func TestQuestionRepliesEscapeTextAndPreserveAnswerWhitespace(t *testing.T) {
 func TestQuestionReplyInvalidPayloadUsesNormalMessage(t *testing.T) {
 	for _, payload := range []string{`not JSON`, `[]`, `null`, `{}`, `[{"question":"Q"}]`, `[{"question":"Q","answer":"A"},{"answer":"B"}]`} {
 		source := "<send_user_message_question_reply>" + payload + "</send_user_message_question_reply>"
-		var b strings.Builder
-		b.WriteString("prefix")
+		var b markup.Builder
+		b.Text("prefix")
 		if renderQuestionReplies(&b, source) || b.String() != "prefix" {
 			t.Fatal("invalid payload was partially rendered", source, b.String())
 		}
@@ -75,7 +76,7 @@ func TestQuestionReplyInvalidPayloadUsesNormalMessage(t *testing.T) {
 			t.Fatal("unrecognized message was hidden", b.String())
 		}
 	}
-	var b strings.Builder
+	var b markup.Builder
 	if n := testing.AllocsPerRun(100, func() {
 		if renderQuestionReplies(&b, "ordinary user message") {
 			t.Fatal("ordinary message was treated as a reply")
@@ -111,7 +112,7 @@ func TestUserMessageActionsAndInlineEdit(t *testing.T) {
 	a, c, output := messageEditFixture(t)
 	view := a.composerView()
 	validateBindings(t, view)
-	for _, want := range []string{`class="codex-message-time"`, `>10:06</span>`, `data-pencode-copy="` + html.EscapeString(c.items[1].text.String()) + `"`, `data-ref="edit-message/target&#34;"`} {
+	for _, want := range []string{`class="codex-message-time"`, `>10:06</span>`, `data-pencode-copy="` + html.EscapeString(c.items[1].text.String()) + `"`, `data-ref="edit-message/target&quot;"`} {
 		if !strings.Contains(view.HTML, want) {
 			t.Fatalf("missing message action %q", want)
 		}
@@ -121,7 +122,7 @@ func TestUserMessageActionsAndInlineEdit(t *testing.T) {
 	}
 	view = a.composerView()
 	validateBindings(t, view)
-	if !strings.Contains(view.HTML, `data-ref="message-edit-text"`) || !strings.Contains(view.HTML, `data-pencode-submit-on-enter="message-edit-form"`) || strings.Contains(view.HTML, `data-ref="copy-message/target&#34;"`) {
+	if !strings.Contains(view.HTML, `data-ref="message-edit-text"`) || !strings.Contains(view.HTML, `data-pencode-submit-on-enter="message-edit-form"`) || strings.Contains(view.HTML, `data-ref="copy-message/target&quot;"`) {
 		t.Fatal("editor did not replace the selected bubble")
 	}
 	cmd := command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "input", Ref: "message-edit-text", Value: "<updated>\n任务"}}}

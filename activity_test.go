@@ -26,8 +26,8 @@ func TestActivityGroupThreeLevelsAndStreaming(t *testing.T) {
 	if strings.Count(view.HTML, `class="codex-activity-summary"`) != 1 || strings.Contains(view.HTML, "go test") || !strings.Contains(view.HTML, "进行中") {
 		t.Fatal("group should start collapsed with running state", view.HTML)
 	}
-	region := `data-ref="` + thinking.groupRef + `/region" data-pencode-region`
-	if !strings.Contains(view.HTML, region) {
+	region := thinking.groupRef + "/region"
+	if !hasElement(view.HTML, "section", "data-ref", region, "data-pencode-region", "") {
 		t.Fatal("activity updates must be isolated from the surrounding transcript", view.HTML)
 	}
 	clickActivity(t, a, thinking.groupRef)
@@ -36,7 +36,7 @@ func TestActivityGroupThreeLevelsAndStreaming(t *testing.T) {
 	if strings.Count(view.HTML, `class="codex-activity-summary"`) != 3 || !strings.Contains(view.HTML, "已运行 go test ./...") || strings.Contains(view.HTML, "<pre>") {
 		t.Fatal("group should reveal collapsed item summaries", view.HTML)
 	}
-	if !strings.Contains(view.HTML, region) {
+	if !hasElement(view.HTML, "section", "data-ref", region, "data-pencode-region", "") {
 		t.Fatal("expanding a group changed its region identity", view.HTML)
 	}
 	clickActivity(t, a, cmd.detailRef)

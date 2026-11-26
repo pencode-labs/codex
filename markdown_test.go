@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/onix-engine/onix/html/markup"
 )
 
 func TestChatMarkdownStrong(t *testing.T) {
@@ -25,7 +27,7 @@ func TestChatMarkdownStrong(t *testing.T) {
 		{"file_name_here", "<p>file_name_here</p>\n"},
 	} {
 		t.Run(tc.source, func(t *testing.T) {
-			var b strings.Builder
+			var b markup.Builder
 			renderMarkdown(&b, tc.source, chatMarkdownState{scope: "message"})
 			if got := b.String(); got != tc.want {
 				t.Fatalf("renderMarkdown() = %q, want %q", got, tc.want)
@@ -36,12 +38,15 @@ func TestChatMarkdownStrong(t *testing.T) {
 
 func TestChatFencedCodeBlocks(t *testing.T) {
 	const code = "  echo \"$HOME\"  # <tag> & 'text'\n\n\tprintf ok\n"
-	var b strings.Builder
+	var b markup.Builder
 	renderMarkdown(&b, "`inline`\n\n```sh example\n"+code+"```\n\n~~~\n**普通文本**\n~~~\n\n```x-unknown<&\n<literal>\n```\n\n    indented", chatMarkdownState{scope: "message"})
 	markup := b.String()
+	if !hasElement(markup, "button", "data-pencode-copy", code) {
+		t.Fatal("copy button lost the original code")
+	}
 	for _, want := range []string{
 		"<code>inline</code>", ">Bash</span>", ">代码</span>", ">x-unknown&lt;&amp;</span>",
-		`data-pencode-copy="` + html.EscapeString(code) + `"`, `class="tok-variable"`, `class="tok-comment"`,
+		`class="tok-variable"`, `class="tok-comment"`,
 		"<pre><code>**普通文本**\n</code></pre>", "<pre><code>&lt;literal&gt;\n</code></pre>", "<pre><code>indented\n</code></pre>",
 	} {
 		if !strings.Contains(markup, want) {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"html"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -69,7 +68,7 @@ func TestViewedImagesHistoryAndStream(t *testing.T) {
 			clickActivity(t, a, first.groupRef)
 			view = a.composerView()
 			validateBindings(t, view)
-			if strings.Count(view.HTML, `class="codex-viewed-image"`) != 2 || !strings.Contains(view.HTML, html.EscapeString(filepath.Base(path))) || !strings.Contains(view.HTML, "data:image/png;base64,") {
+			if strings.Count(view.HTML, `class="codex-viewed-image"`) != 2 || !hasElement(view.HTML, "button", "data-ref", "view-image/"+first.data.ID, "title", filepath.Base(path)) || !strings.Contains(view.HTML, "data:image/png;base64,") {
 				t.Fatal("expanded summary lost thumbnails or path escaping")
 			}
 			preview := first.images[0].preview

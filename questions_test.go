@@ -37,7 +37,10 @@ func TestQuestionCardSelectionAndCustomReply(t *testing.T) {
 	if card < composer || card > prompt || strings.Contains(view.HTML, "Codex 需要你的确认") {
 		t.Fatal("question must appear above the composer input", view.HTML)
 	}
-	for _, want := range []string{"实现 &lt;新需求&gt;", "或自行撰写回复", `aria-pressed="false"`, `aria-label="发送" disabled`} {
+	if !hasElement(view.HTML, "button", "aria-label", "发送", "disabled", "") {
+		t.Fatal("empty answer enabled send")
+	}
+	for _, want := range []string{"实现 &lt;新需求&gt;", "或自行撰写回复", `aria-pressed="false"`} {
 		if !strings.Contains(view.HTML, want) {
 			t.Fatalf("missing %q: %s", want, view.HTML)
 		}
@@ -49,7 +52,7 @@ func TestQuestionCardSelectionAndCustomReply(t *testing.T) {
 	questionEvent(t, a, ref+"select/1", "click", "")
 	view = a.composerView()
 	validateBindings(t, view)
-	if output.Len() != 0 || !c.dirty || p.Questions[0].value() != "排查并修复问题" || !strings.Contains(view.HTML, `aria-pressed="true"`) || strings.Contains(view.HTML, `aria-label="发送" disabled`) {
+	if output.Len() != 0 || !c.dirty || p.Questions[0].value() != "排查并修复问题" || !strings.Contains(view.HTML, `aria-pressed="true"`) || hasElement(view.HTML, "button", "aria-label", "发送", "disabled", "") {
 		t.Fatal("selection did not update the card without sending")
 	}
 	questionEvent(t, a, ref+"input", "input", " 自定义 <回答> ")
@@ -87,7 +90,7 @@ func TestQuestionNavigationRetainsAnswersAndMasksSecrets(t *testing.T) {
 	questionEvent(t, a, first+"form", "submit", "")
 	view := a.composerView()
 	validateBindings(t, view)
-	if p.current != 1 || output.Len() != 0 || !strings.Contains(view.HTML, "2 / 2") || !strings.Contains(view.HTML, `type="password" autocomplete="off"`) {
+	if p.current != 1 || output.Len() != 0 || !strings.Contains(view.HTML, "2 / 2") || !hasElement(view.HTML, "input", "type", "password", "autocomplete", "off") {
 		t.Fatal("next question lost the secret input or submitted early", view.HTML)
 	}
 	questionEvent(t, a, first+"select/1", "click", "")

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"html"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -81,7 +81,7 @@ func (i *chatItem) activityKinds() activityKind {
 	return 0
 }
 
-func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, sweep bool) []peb.EditorBinding {
+func renderActivityGroup(b *markup.Builder, bindings []peb.EditorBinding, items []*chatItem, sweep bool) []peb.EditorBinding {
 	first := items[0]
 	if first.groupRef == "" {
 		first.groupRef = "activity/" + first.data.ID
@@ -99,55 +99,46 @@ func renderActivityGroup(b *strings.Builder, bindings []peb.EditorBinding, items
 	}
 	// Keep expansion and streamed activity updates inside this group so the
 	// transcript, its scroll container and the composer retain their nodes.
-	b.WriteString(`<section class="codex-activity-group" data-ref="`)
-	b.WriteString(html.EscapeString(first.groupRef))
-	b.WriteString(`/region" data-pencode-region><button class="codex-activity-summary" type="button" data-ref="`)
-	b.WriteString(html.EscapeString(first.groupRef))
-	b.WriteString(`" aria-expanded="`)
-	b.WriteString(strconv.FormatBool(first.groupExpanded))
-	b.WriteString(`"><img src="resources/icons/`)
-	b.WriteString(kinds.primary().icon)
-	b.WriteString(`.svg" alt=""><span>`)
+	b.Open("section", "class", "codex-activity-group", "data-ref", first.groupRef+"/region", "data-pencode-region", "")
+	b.Open("button", "class", "codex-activity-summary", "type", "button", "data-ref", first.groupRef, "aria-expanded", strconv.FormatBool(first.groupExpanded))
+	b.Element("img", "src", "resources/icons/"+kinds.primary().icon+".svg", "alt", "")
+	b.Open("span")
 	// Thinking stays in the timeline without making mixed group titles verbose.
 	if kinds != activityReasoning {
 		kinds &^= activityReasoning
 	}
-	if kinds == activityReasoning {
-		label := first.reasoningLabel()
-		if sweep && !first.groupExpanded {
-			renderSweepText(b, label)
-		} else {
-			b.WriteString(html.EscapeString(label))
-		}
-	} else if sweep && !first.groupExpanded {
-		var label strings.Builder
-		renderActivityTitle(&label, kinds)
-		renderSweepText(b, label.String())
-	} else {
-		renderActivityTitle(b, kinds)
+	label := first.reasoningLabel()
+	if kinds != activityReasoning {
+		var title strings.Builder
+		renderActivityTitle(&title, kinds)
+		label = title.String()
 	}
-	b.WriteString(`</span>`)
+	if sweep && !first.groupExpanded {
+		renderSweepText(b, label)
+	} else {
+		b.Text(label)
+	}
+	b.End()
 	if running {
 		renderActivityStatus(b, "inProgress")
 	}
 	if declined {
 		renderActivityStatus(b, "declined")
 	}
-	b.WriteString(`<img class="codex-activity-chevron" src="resources/icons/chevron-down.svg" alt=""></button>`)
+	b.Element("img", "class", "codex-activity-chevron", "src", "resources/icons/chevron-down.svg", "alt", "")
+	b.End()
 	bindings = append(bindings, peb.EditorBinding{Ref: first.groupRef, Kind: "click"})
 	if first.groupExpanded {
-		b.WriteString(`<div class="codex-activity-list" data-ref="`)
-		b.WriteString(html.EscapeString(first.groupRef))
-		b.WriteString(`/list" data-pencode-scroll="preserve">`)
+		b.Open("div", "class", "codex-activity-list", "data-ref", first.groupRef+"/list", "data-pencode-scroll", "preserve")
 		for _, i := range items {
-			b.WriteString(i.html)
+			b.Embed(i.html)
 			if i.detailRef != "" {
 				bindings = append(bindings, peb.EditorBinding{Ref: i.detailRef, Kind: "click"})
 			}
 		}
-		b.WriteString(`</div>`)
+		b.End()
 	}
-	b.WriteString(`</section>`)
+	b.End()
 	return bindings
 }
 
@@ -162,7 +153,7 @@ func renderActivityTitle(b *strings.Builder, kinds activityKind) {
 	}
 }
 
-func renderActivityStatus(b *strings.Builder, status string) {
+func renderActivityStatus(b *markup.Builder, status string) {
 	label := status
 	switch status {
 	case "", "completed", "failed":
@@ -172,13 +163,11 @@ func renderActivityStatus(b *strings.Builder, status string) {
 	case "declined":
 		label = "已拒绝"
 	}
-	b.WriteString(`<span class="codex-activity-status`)
+	class := "codex-activity-status"
 	if status == "declined" {
-		b.WriteString(` codex-status`)
+		class += " codex-status"
 	}
-	b.WriteString(`">`)
-	b.WriteString(html.EscapeString(label))
-	b.WriteString(`</span>`)
+	b.TextElement("span", label, "class", class)
 }
 
 func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
@@ -186,7 +175,7 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 	case "commandExecution":
 		if len(i.data.CommandActions) == 0 {
 			b.WriteString("已运行 ")
-			b.WriteString(html.EscapeString(i.data.Command))
+			b.WriteString(i.data.Command)
 		}
 		for index, action := range i.data.CommandActions {
 			if index > 0 {
@@ -199,11 +188,11 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 				if name == "" {
 					name = action.Path
 				}
-				b.WriteString(html.EscapeString(name))
+				b.WriteString(name)
 			case "listFiles":
 				b.WriteString("已列出 ")
 				if action.Path != "" {
-					b.WriteString(html.EscapeString(action.Path))
+					b.WriteString(action.Path)
 					b.WriteString(" 中的")
 				}
 				b.WriteString("文件")
@@ -212,17 +201,17 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 				if action.Path == "" {
 					b.WriteString("项目")
 				} else {
-					b.WriteString(html.EscapeString(action.Path))
+					b.WriteString(action.Path)
 				}
 				b.WriteString(" 中搜索")
 				if action.Query != "" {
 					b.WriteString("“")
-					b.WriteString(html.EscapeString(action.Query))
+					b.WriteString(action.Query)
 					b.WriteString("”")
 				}
 			default:
 				b.WriteString("已运行 ")
-				b.WriteString(html.EscapeString(action.Command))
+				b.WriteString(action.Command)
 			}
 		}
 	case "fileChange":
@@ -235,7 +224,7 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 			if index > 0 {
 				b.WriteString("、")
 			}
-			b.WriteString(html.EscapeString(filepath.Base(change.Path)))
+			b.WriteString(filepath.Base(change.Path))
 			added, removed := change.lineCounts()
 			b.WriteString(" +")
 			writeActivityCount(b, added)
@@ -243,9 +232,9 @@ func (i *chatItem) renderActivityLabel(b *strings.Builder, fallback string) {
 			writeActivityCount(b, removed)
 		}
 	case "reasoning":
-		b.WriteString(html.EscapeString(i.reasoningLabel()))
+		b.WriteString(i.reasoningLabel())
 	default:
-		b.WriteString(html.EscapeString(fallback))
+		b.WriteString(fallback)
 	}
 }
 

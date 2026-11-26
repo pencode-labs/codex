@@ -2,14 +2,13 @@ package main
 
 import (
 	"fmt"
-	"html"
 	"image"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
+	"github.com/onix-engine/onix/html/markup"
 	"github.com/pencode-labs/pencode/peb"
 )
 
@@ -64,60 +63,51 @@ func (a *agent) openViewedImage(id string) error {
 	return nil
 }
 
-func renderViewedImages(b *strings.Builder, bindings []peb.EditorBinding, items []*chatItem, root string) []peb.EditorBinding {
+func renderViewedImages(b *markup.Builder, bindings []peb.EditorBinding, items []*chatItem, root string) []peb.EditorBinding {
 	first := items[0]
 	if first.groupRef == "" {
 		first.groupRef = "activity/" + first.data.ID
 	}
-	b.WriteString(`<section class="codex-image-views" data-ref="`)
-	b.WriteString(html.EscapeString(first.groupRef))
-	b.WriteString(`/region" data-pencode-region><button class="codex-activity-summary" type="button" data-ref="`)
-	b.WriteString(html.EscapeString(first.groupRef))
-	b.WriteString(`" aria-expanded="`)
-	b.WriteString(strconv.FormatBool(first.groupExpanded))
-	b.WriteString(`"><img src="resources/icons/images.svg" alt=""><span>已查看 `)
-	writeActivityCount(b, len(items))
-	b.WriteString(` 张图像</span><img class="codex-activity-chevron" src="resources/icons/chevron-down.svg" alt=""></button>`)
+	b.Open("section", "class", "codex-image-views", "data-ref", first.groupRef+"/region", "data-pencode-region", "")
+	b.Open("button", "class", "codex-activity-summary", "type", "button", "data-ref", first.groupRef, "aria-expanded", strconv.FormatBool(first.groupExpanded))
+	b.Element("img", "src", "resources/icons/images.svg", "alt", "")
+	b.Open("span")
+	b.Text("已查看 ")
+	b.Text(strconv.Itoa(len(items)))
+	b.Text(" 张图像")
+	b.End()
+	b.Element("img", "class", "codex-activity-chevron", "src", "resources/icons/chevron-down.svg", "alt", "")
+	b.End()
 	bindings = append(bindings, peb.EditorBinding{Ref: first.groupRef, Kind: "click"})
 	if first.groupExpanded {
-		b.WriteString(`<div class="codex-images" aria-label="已查看的图像">`)
+		b.Open("div", "class", "codex-images", "aria-label", "已查看的图像")
 		for _, i := range items {
 			if i.html == "" {
-				var thumbnail strings.Builder
+				var thumbnail markup.Builder
 				i.renderViewedImage(&thumbnail, root)
 				i.html = thumbnail.String()
 			}
-			b.WriteString(i.html)
+			b.Embed(i.html)
 			bindings = append(bindings, i.linkBindings...)
 		}
-		b.WriteString(`</div>`)
+		b.End()
 	}
-	b.WriteString(`</section>`)
+	b.End()
 	return bindings
 }
 
-func (i *chatItem) renderViewedImage(b *strings.Builder, root string) {
+func (i *chatItem) renderViewedImage(b *markup.Builder, root string) {
 	if len(i.images) == 0 {
 		preview, _ := localImagePreview(i.data.Path, root, 160)
 		i.images = append(i.images, imageAttachment{preview: preview})
 	}
 	ref := "view-image/" + i.data.ID
 	i.linkBindings = append(i.linkBindings[:0], peb.EditorBinding{Ref: ref, Kind: "click"})
-	b.WriteString(`<button type="button" class="codex-viewed-image" data-ref="`)
-	b.WriteString(html.EscapeString(ref))
-	b.WriteString(`" aria-haspopup="dialog" aria-label="查看图片 `)
-	b.WriteString(html.EscapeString(filepath.Base(i.data.Path)))
-	b.WriteString(`" title="`)
-	b.WriteString(html.EscapeString(i.data.Path))
-	b.WriteString(`">`)
+	b.Open("button", "type", "button", "class", "codex-viewed-image", "data-ref", ref, "aria-haspopup", "dialog", "aria-label", "查看图片 "+filepath.Base(i.data.Path), "title", i.data.Path)
 	if i.images[0].preview == "" {
-		b.WriteString(`<span class="codex-muted">图片不可用</span>`)
+		b.TextElement("span", "图片不可用", "class", "codex-muted")
 	} else {
-		b.WriteString(`<img src="`)
-		b.WriteString(i.images[0].preview)
-		b.WriteString(`" alt="`)
-		b.WriteString(html.EscapeString(filepath.Base(i.data.Path)))
-		b.WriteString(`">`)
+		b.Element("img", "src", i.images[0].preview, "alt", filepath.Base(i.data.Path))
 	}
-	b.WriteString(`</button>`)
+	b.End()
 }

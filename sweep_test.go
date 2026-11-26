@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/onix-engine/onix/html/markup"
 )
 
 func TestSweepFollowsLatestActivity(t *testing.T) {
@@ -95,7 +97,7 @@ func TestExpandedSweepMovesWithActivityAndKeepsDetails(t *testing.T) {
 }
 
 func TestSweepEscapesTextAndBoundsAnimationTracks(t *testing.T) {
-	var b strings.Builder
+	var b markup.Builder
 	renderSweepText(&b, strings.Repeat("<搜索>", 100))
 	if strings.Count(b.String(), `animation-delay:`) > 16 || !utf8.ValidString(b.String()) || strings.Contains(b.String(), "<搜索>") {
 		t.Fatal("sweep must stay bounded and escape valid UTF-8", b.String())
