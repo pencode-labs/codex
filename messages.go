@@ -55,6 +55,42 @@ func (i *chatItem) setSentAt(started int64) {
 	}
 }
 
+func (c *conversation) removePendingMessage(i *chatItem) {
+	if index := slices.Index(c.items, i); index >= 0 {
+		c.items = slices.Delete(c.items, index, index+1)
+		delete(c.itemsByID, i.data.ID)
+		c.dirty = true
+	}
+}
+
+func (c *conversation) clearServerHistory() {
+	c.items = slices.DeleteFunc(c.items, func(i *chatItem) bool {
+		if i.sendError == "" {
+			return true
+		}
+		i.progress, i.files = nil, nil
+		return false
+	})
+	if len(c.items) == 0 {
+		c.items = nil
+	}
+	c.itemsByID = nil
+}
+
+func (c *conversation) confirmMessage(item threadItem) {
+	byID := c.itemIndex()
+	if i := byID[item.ClientID]; i != nil && i.pending {
+		if existing := byID[item.ID]; existing != nil && existing != i {
+			c.removePendingMessage(i)
+			i.pending = false
+			return
+		}
+		delete(byID, item.ClientID)
+		i.data.ID = item.ID
+		byID[item.ID] = i
+	}
+}
+
 func (i *chatItem) renderMessageActions(b *markup.Builder) {
 	b.Open("div", "class", "codex-message-actions")
 	if !i.sentAt.IsZero() {
@@ -64,7 +100,7 @@ func (i *chatItem) renderMessageActions(b *markup.Builder) {
 		b.Open("button", "type", "button", "class", "codex-icon-button", "data-ref", "copy-message/"+i.data.ID, "data-pencode-copy", i.text.String(), "title", "复制消息", "aria-label", "复制消息")
 		b.Element("img", "data-pencode-icon", "copy", "data-ref", "copy-message-icon/"+i.data.ID, "src", "resources/icons/copy.svg", "alt", "")
 		b.End()
-		if i.files != nil && i.files.id != "" {
+		if !i.pending && i.files != nil && i.files.id != "" {
 			ref := "edit-message/" + i.data.ID
 			b.Open("button", "type", "button", "class", "codex-icon-button codex-message-edit", "data-ref", ref, "title", "编辑消息", "aria-label", "编辑消息")
 			b.Element("img", "src", "resources/icons/pencil.svg", "alt", "")
@@ -99,7 +135,7 @@ func (a *agent) editMessage(id string) error {
 		return nil
 	}
 	for _, i := range c.items {
-		if i.data.ID == id && i.data.Type == "userMessage" && i.files != nil && i.files.id != "" {
+		if i.data.ID == id && i.data.Type == "userMessage" && !i.pending && i.files != nil && i.files.id != "" {
 			c.cancelEdit()
 			c.editing, c.editDraft = i, i.text.String()
 			c.editRevision++

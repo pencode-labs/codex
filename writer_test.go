@@ -39,11 +39,12 @@ func TestOccupiedThreadOpensHistoryAndRetriesResume(t *testing.T) {
 	c.draft = "continue"
 	a.addAttachment("context.go")
 	next := a.client.next
-	if err := a.send(); err == nil || err.Error() != c.status {
-		t.Fatal("sending to an occupied thread did not explain the conflict", err)
+	if err := a.send(); err != nil || c.items[len(c.items)-1].sendError != c.status ||
+		!strings.Contains(c.items[len(c.items)-1].text.String(), "context.go") {
+		t.Fatal("sending to an occupied thread did not retain the message and conflict", err)
 	}
-	if c.draft != "continue" || len(a.attachments[a.attachmentScope()]) != 1 || c.loaded || c.busy || a.client.next != next+3 {
-		t.Fatal("failed send lost its draft/attachment or submitted a turn")
+	if c.draft != "" || len(a.attachments[a.attachmentScope()]) != 0 || c.loaded || c.busy || a.client.next != next+3 {
+		t.Fatal("failed send retained composer input or submitted a turn")
 	}
 	if err := os.Remove(lock); err != nil {
 		t.Fatal(err)
@@ -51,8 +52,9 @@ func TestOccupiedThreadOpensHistoryAndRetriesResume(t *testing.T) {
 	if err := a.resume(c.ID); err != nil {
 		t.Fatal("released thread could not be resumed", err)
 	}
-	if a.selected != c || !c.loaded || c.busy || c.turnID != "" || c.status != "" || c.draft != "continue" || len(a.attachments[a.attachmentScope()]) != 1 {
-		t.Fatal("released thread did not restore ownership and its draft", c)
+	if a.selected != c || !c.loaded || c.busy || c.turnID != "" || c.status != "" || c.draft != "" ||
+		c.items[len(c.items)-1].sendError == "" {
+		t.Fatal("released thread did not restore ownership and retain the failed message", c)
 	}
 }
 

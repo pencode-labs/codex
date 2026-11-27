@@ -114,7 +114,9 @@ func TestRunningComposerSendsFollowups(t *testing.T) {
 				if err := json.Unmarshal(request.Params["input"], &inputs); err != nil {
 					t.Fatal(err)
 				}
-				if request.Method != "turn/steer" || len(request.Params) != 3 || string(request.Params["threadId"]) != `"thread"` || string(request.Params["expectedTurnId"]) != `"turn"` {
+				var clientID string
+				if request.Method != "turn/steer" || len(request.Params) != 4 || string(request.Params["threadId"]) != `"thread"` || string(request.Params["expectedTurnId"]) != `"turn"` ||
+					json.Unmarshal(request.Params["clientUserMessageId"], &clientID) != nil || clientID == "" || clientID != c.items[attempt].data.ID {
 					t.Fatal("followup did not use the steer protocol", output.String())
 				}
 				if attempt == 0 && (len(inputs) != 2 || !strings.Contains(inputs[0].Text, "context.go") || inputs[1].Type != "image") || attempt == 1 && (len(inputs) != 1 || inputs[0].Text != "再补充一条") {
@@ -176,14 +178,23 @@ func TestFollowupThinkingBeforeAcknowledgement(t *testing.T) {
 			t.Fatal("expected a single thinking indicator below the latest message", view.HTML)
 		}
 	}
-	a.client.messages <- envelope{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread","item":{"id":"extra","type":"userMessage","text":"补充要求"}}`)}
 	a.client.messages <- envelope{ID: json.RawMessage(`1`), Result: json.RawMessage(`{"turnId":"turn"}`)}
 	if err := a.handleCommand(submit); err != nil {
 		t.Fatal(err)
 	}
-	checkThinking(ui.ui.View, "first")
-	if strings.Contains(ui.ui.View.HTML, `data-ref="message/extra"`) {
-		t.Fatal("first paint waited for the server to echo the followup")
+	pending := c.items[1]
+	checkThinking(ui.ui.View, pending.data.ID)
+	if !strings.Contains(ui.ui.View.HTML, "补充要求") || strings.Contains(ui.ui.View.HTML, "补充要求</textarea>") {
+		t.Fatal("followup did not move into the transcript before acknowledgement", ui.ui.View.HTML)
+	}
+	echo, err := json.Marshal(map[string]any{"threadId": c.ID, "item": threadItem{ID: "extra", ClientID: pending.data.ID, Type: "userMessage", Text: "补充要求"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notify("item/started", string(echo))
+	notify("item/completed", string(echo))
+	if len(c.items) != 2 || c.items[1] != pending || pending.data.ID != "extra" || pending.pending {
+		t.Fatal("the followup echo did not replace the local message")
 	}
 	notify("item/agentMessage/delta", `{"threadId":"thread","itemId":"first","delta":"迟到的内容"}`)
 	notify("item/started", `{"threadId":"thread","item":{"id":"next","type":"reasoning"}}`)
@@ -198,40 +209,45 @@ func TestFollowupThinkingBeforeAcknowledgement(t *testing.T) {
 	}
 	c.draft = "再补充一条"
 	a.client.messages <- envelope{ID: json.RawMessage(`2`), Error: &rpcError{Message: "rejected"}}
-	if err := a.handleCommand(submit); err == nil {
-		t.Fatal("expected rejected followup")
+	if err := a.handleCommand(submit); err != nil {
+		t.Fatal(err)
 	}
-	checkThinking(ui.ui.View, "extra")
-	if view := a.composerView(); strings.Contains(view.HTML, "正在思考") || c.draft != "再补充一条" {
-		t.Fatal("rejected followup left a pending indicator or lost the draft", view.HTML)
+	if view := ui.ui.View; strings.Contains(view.HTML, "正在思考") || c.draft != "" || !strings.Contains(view.HTML, "发送失败") || !strings.Contains(view.HTML, "再补充一条") {
+		t.Fatal("rejected followup was not retained and marked", view.HTML)
 	}
+	a.setDraft("再补充一条")
 	a.client.messages <- envelope{ID: json.RawMessage(`3`), Result: json.RawMessage(`{"turnId":"turn"}`)}
 	if err := a.handleCommand(submit); err != nil {
 		t.Fatal(err)
 	}
-	checkThinking(a.composerView(), "extra")
+	checkThinking(a.composerView(), c.items[len(c.items)-1].data.ID)
 	notify("turn/completed", `{"threadId":"thread","turn":{"id":"turn","status":"interrupted","durationMs":12000}}`)
-	if view := a.composerView(); strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "用时 12s") {
-		t.Fatal("interruption left the followup waiting", view.HTML)
+	if view := a.composerView(); strings.Contains(view.HTML, "正在思考") || !strings.Contains(view.HTML, "用时 12s") ||
+		!strings.Contains(view.HTML, "发送失败") {
+		t.Fatal("turn completion lost the failure or left the followup waiting", view.HTML)
 	}
 }
 
-func TestRejectedSteerPreservesDraftAndAttachments(t *testing.T) {
+func TestRejectedSteerKeepsMessageAndAttachmentsInHistory(t *testing.T) {
 	a, c, output := asyncQuestionFixture(t)
 	c.Name = "task"
 	a.publisher = &capturedUI{}
+	a.workspaceOpen = true
 	a.addAttachment("context.go")
 	if err := a.pasteImage(peb.EditorEvent{InputType: "image/png", Data: testImageURL(t), Value: c.draft}); err != nil {
 		t.Fatal(err)
 	}
 	a.client.messages <- envelope{ID: json.RawMessage(`1`), Error: &rpcError{Code: -32600, Message: "Turn mismatch"}}
 	a.processCommand(command{event: peb.UIEvent{ID: "composer", Event: peb.EditorEvent{Kind: "submit", Ref: "form"}}})
-	if c.draft != "保留草稿" || len(a.images[a.attachmentScope()]) != 1 || len(a.attachments[a.attachmentScope()]) != 1 || !c.busy || strings.Contains(output.String(), `"method":"turn/start"`) {
-		t.Fatal("rejected followup lost input or started another turn")
+	if c.draft != "" || len(a.images) != 0 || len(a.attachments) != 0 || !c.busy || strings.Contains(output.String(), `"method":"turn/start"`) {
+		t.Fatal("rejected followup retained composer input or started another turn")
 	}
-	if ui := a.publisher.(*capturedUI).ui; ui.Kind != peb.Notification || !strings.Contains(ui.View.HTML, "Turn mismatch") {
-		t.Fatal("send failure was not shown as a notification", ui)
+	failed := c.items[len(c.items)-1]
+	if ui := a.publisher.(*capturedUI).ui; ui.Kind != peb.EditorTab || !strings.Contains(ui.View.HTML, "Turn mismatch") ||
+		!strings.Contains(failed.text.String(), "context.go") || len(failed.images) != 1 {
+		t.Fatal("send failure did not retain the message, attachments and error", ui)
 	}
+	a.setDraft("next followup")
 	a.client.messages <- envelope{ID: json.RawMessage(`2`), Result: json.RawMessage(`{"turnId":"turn"}`)}
 	questionEvent(t, a, "send", "click", "")
 	if c.draft != "" || len(a.images) != 0 || len(a.attachments) != 0 {

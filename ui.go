@@ -39,7 +39,7 @@ var chatRenderer = markdownhtml.New(markdownhtml.WithHardWraps(), markdownhtml.W
 }))
 
 func (a *agent) flush() {
-	if !a.dirty() {
+	if a.publisher == nil || !a.dirty() {
 		return
 	}
 	title, busy, unread := "Codex 新会话", false, false
@@ -110,15 +110,10 @@ func (a *agent) composerView() *peb.EditorView {
 		status = a.selected.syncError
 	}
 	if a.selected != nil {
-		bindings = a.selected.render(b, bindings, status)
+		bindings = a.selected.render(b, bindings, status, a.sending)
 	} else {
-		b.Open("article", "class", "codex-chat")
-		renderChatStatus(b, status)
-		b.Open("div", "class", "codex-empty")
-		b.TextElement("h2", "与 Codex 一起工作")
-		b.TextElement("p", "回复、命令执行和文件修改会显示在这里。")
-		b.End()
-		b.End()
+		empty := conversation{context: a.context}
+		bindings = empty.render(b, bindings, status, a.sending)
 	}
 	b.End()
 	p := a.permission()
@@ -339,12 +334,15 @@ func (c *conversation) renderProgress(b *markup.Builder, bindings []peb.EditorBi
 		bindings = append(bindings, peb.EditorBinding{Ref: progress.toggleRef, Kind: "click"})
 	}
 	if progress == c.progress {
+		if status == "" {
+			status = progress.retryStatus
+		}
 		renderChatStatus(b, status)
 	}
 	return bindings
 }
 
-func (c *conversation) render(b *markup.Builder, bindings []peb.EditorBinding, status string) []peb.EditorBinding {
+func (c *conversation) render(b *markup.Builder, bindings []peb.EditorBinding, status string, sending *chatItem) []peb.EditorBinding {
 	class := "codex-chat"
 	if c.busy {
 		class += " codex-chat-running"
@@ -354,7 +352,7 @@ func (c *conversation) render(b *markup.Builder, bindings []peb.EditorBinding, s
 		b.TextElement("button", "加载更早的记录", "data-ref", "older", "type", "button")
 		bindings = append(bindings, peb.EditorBinding{Ref: "older", Kind: "click"})
 	}
-	if len(c.items) == 0 && c.progress == nil {
+	if len(c.items) == 0 && c.progress == nil && sending == nil {
 		b.Open("div", "class", "codex-empty")
 		b.TextElement("h2", "与 Codex 一起工作")
 		b.TextElement("p", "回复、命令执行和文件修改会显示在这里。")
@@ -414,7 +412,7 @@ func (c *conversation) render(b *markup.Builder, bindings []peb.EditorBinding, s
 		c.releasePaintBefore(start - 1)
 		b.TextElement("p", "较早输出已折叠，完整记录保存在 Codex 会话中。", "class", "codex-muted")
 	}
-	var progress *turnProgress
+	renderedProgress := false
 	files = nil
 	for index := start; index < len(c.items); {
 		i := c.items[index]
@@ -427,11 +425,11 @@ func (c *conversation) render(b *markup.Builder, bindings []peb.EditorBinding, s
 			end++
 		}
 		bindings = c.renderTurn(b, bindings, c.items[index:end], status, latestActivity-index)
-		progress = i.progress
+		renderedProgress = renderedProgress || i.progress == c.progress
 		index = end
 	}
 	bindings = files.render(b, bindings)
-	if c.progress != nil && c.progress != progress {
+	if c.progress != nil && !renderedProgress {
 		bindings = c.renderProgress(b, bindings, c.progress, status, false)
 	}
 	if c.progress == nil {
@@ -441,6 +439,10 @@ func (c *conversation) render(b *markup.Builder, bindings []peb.EditorBinding, s
 		if r.questions == nil {
 			bindings = r.render(b, bindings)
 		}
+	}
+	if sending != nil {
+		sending.render(b, c.context.ProjectPath, fmt.Sprintf("%p", sending))
+		bindings = append(bindings, sending.linkBindings...)
 	}
 	b.End()
 	return bindings
@@ -634,6 +636,9 @@ func (i *chatItem) render(b *markup.Builder, root, scope string) {
 	if i.data.Type == "userMessage" {
 		if i.text.Len() > 0 {
 			b.End()
+		}
+		if i.sendError != "" {
+			b.TextElement("p", "发送失败 · "+i.sendError, "class", "codex-send-error codex-status", "role", "alert")
 		}
 		i.renderMessageActions(b)
 	}

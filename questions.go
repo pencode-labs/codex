@@ -71,7 +71,7 @@ func (c *conversation) resolvePastQuestions() {
 	answered := false
 	for index := len(c.items) - 1; index >= 0; index-- {
 		item := c.items[index]
-		if item.data.Type == "userMessage" {
+		if item.data.Type == "userMessage" && !item.pending {
 			answered = true
 		} else if answered && item.questions != nil && !item.questions.answered {
 			item.questions.answered = true

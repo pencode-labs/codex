@@ -232,9 +232,11 @@ func TestCompletionLinksSendVerbatimAndRetry(t *testing.T) {
 	a.client = &rpcClient{ctx: t.Context(), writer: json.NewEncoder(&output), messages: make(chan envelope, 2)}
 	a.client.messages <- envelope{ID: json.RawMessage(`1`), Error: &rpcError{Code: -32000, Message: "retry"}}
 	a.client.messages <- envelope{ID: json.RawMessage(`2`), Result: json.RawMessage(`{"turn":{"id":"turn","status":"completed"}}`)}
-	if err := a.send(); err == nil || a.draft() != prompt || c.busy {
-		t.Fatal("failed send lost the Markdown draft", err)
+	if err := a.send(); err != nil || a.draft() != "" || c.busy || len(c.items) != 1 ||
+		c.items[0].text.String() != prompt || !strings.Contains(c.items[0].sendError, "retry") {
+		t.Fatal("failed send did not retain the Markdown message", err)
 	}
+	a.setDraft(prompt)
 	if err := a.send(); err != nil || a.draft() != "" {
 		t.Fatal("successful retry did not clear the draft", err)
 	}

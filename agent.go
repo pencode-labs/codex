@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,6 +53,7 @@ type threadItem struct {
 	Server           string          `json:"server"`
 	Command          string          `json:"command"`
 	ID               string          `json:"id"`
+	ClientID         string          `json:"clientId,omitempty"`
 	Status           string          `json:"status"`
 	CommandActions   []commandAction `json:"commandActions"`
 	Changes          []change        `json:"changes"`
@@ -60,8 +62,23 @@ type threadItem struct {
 	Questions        []asyncQuestion `json:"questions"`
 	StartedAtMs      int64           `json:"startedAtMs"`
 }
+type turnError struct {
+	Message           string `json:"message"`
+	AdditionalDetails string `json:"additionalDetails,omitempty"`
+}
+
+func (e turnError) description() string {
+	if e.AdditionalDetails == "" || e.AdditionalDetails == e.Message {
+		return e.Message
+	}
+	if e.Message == "" {
+		return e.AdditionalDetails
+	}
+	return e.Message + " — " + e.AdditionalDetails
+}
+
 type turn struct {
-	Error       *rpcError    `json:"error"`
+	Error       *turnError   `json:"error"`
 	DurationMs  *int64       `json:"durationMs"`
 	ID          string       `json:"id"`
 	Status      string       `json:"status"`
@@ -87,6 +104,7 @@ type chatItem struct {
 	html          string
 	detailRef     string
 	groupRef      string
+	sendError     string
 	text, output  strings.Builder
 	images        []imageAttachment
 	linkBindings  []peb.EditorBinding
@@ -96,6 +114,7 @@ type chatItem struct {
 	sweep         bool
 	groupExpanded bool
 	complete      bool
+	pending       bool
 }
 type approval struct {
 	questions *userInputRequest
@@ -168,6 +187,7 @@ type agent struct {
 	commands                                   chan command
 	conversations                              map[string]*conversation
 	selected                                   *conversation
+	sending                                    *chatItem
 	effort, pendingModel                       string
 	model, status                              string
 	executablePath                             string
@@ -363,7 +383,8 @@ func (a *agent) closeClient() {
 			c.titleJob = nil
 		}
 		c.finishProgress(turn{}, time.Now())
-		c.items, c.itemsByID, c.requests = nil, nil, nil
+		c.clearServerHistory()
+		c.requests = nil
 		c.files = nil
 		c.loaded = false
 		c.observing = false
@@ -679,7 +700,6 @@ func (a *agent) toggleTranscript(ref string) bool {
 }
 
 func (a *agent) startThread() (*conversation, error) {
-	a.selectConversation(nil)
 	if err := a.connect(); err != nil {
 		return nil, err
 	}
@@ -720,7 +740,7 @@ func shortTitle(text string) string {
 	return text
 }
 
-func (a *agent) send() error {
+func (a *agent) send() (err error) {
 	a.dismissCompletion()
 	c := a.selected
 	prompt := a.drafts[a.context.ProjectPath]
@@ -737,25 +757,61 @@ func (a *agent) send() error {
 	if c != nil && c.busy && c.observing {
 		return fmt.Errorf("任务正在其他客户端执行，请等待完成或在原客户端停止")
 	}
-	if err := a.connect(); err != nil {
+	text := attachmentPrompt(prompt, files)
+	clientID := rand.Text()
+	message := newChatItem(threadItem{ID: clientID, Type: "userMessage", Text: text}, true)
+	message.sentAt, message.images, message.pending = time.Now(), images, true
+	a.sending = message
+	a.setDraft("")
+	delete(a.attachments, scope)
+	delete(a.images, scope)
+	defer func() {
+		preparing := a.sending != nil
+		a.sending = nil
+		if err == nil {
+			return
+		}
+		fmt.Fprintln(stderrWriter, err)
+		if message.pending {
+			if c == nil {
+				c = &conversation{context: a.context, loaded: true}
+				a.selectConversation(c)
+			}
+			if preparing {
+				c.items = append(c.items, message)
+				if c.itemsByID != nil {
+					c.itemsByID[message.data.ID] = message
+				}
+			}
+			if message.progress != c.progress {
+				message.progress, message.files = nil, nil
+			} else if message.progress != nil {
+				message.progress.expanded = true
+			}
+			message.sendError, message.html = err.Error(), ""
+			c.dirty = true
+			a.flush()
+		}
+		err = nil
+	}()
+	fresh := c == nil || c.ID == ""
+	if fresh || !c.loaded || a.client == nil || a.client.ctx.Err() != nil {
+		a.workspaceDirty = true
+		a.flush()
+	}
+	if err = a.connect(); err != nil {
 		return err
 	}
-	fresh := c == nil
 	if fresh {
-		var err error
-		c, err = a.startThread()
+		started, err := a.startThread()
 		if err != nil {
 			return err
 		}
-		c.draft = prompt
-		if len(images) > 0 {
-			a.images[a.attachmentScope()] = images
-			delete(a.images, scope)
+		if c != nil {
+			started.items = c.items
 		}
-		if len(files) > 0 {
-			a.attachments[a.attachmentScope()] = files
-			delete(a.attachments, scope)
-		}
+		c = started
+		delete(a.drafts, scope.project)
 	} else if !c.loaded {
 		if err := a.resume(c.ID); err != nil {
 			return err
@@ -765,7 +821,7 @@ func (a *agent) send() error {
 		}
 	}
 	c.cancelEdit()
-	a.turnInputs = append(a.turnInputs[:0], input{Type: "text", Text: attachmentPrompt(prompt, files)})
+	a.turnInputs = append(a.turnInputs[:0], input{Type: "text", Text: text})
 	for _, image := range images {
 		a.turnInputs = append(a.turnInputs, input{Type: "image", URL: image.url})
 	}
@@ -773,15 +829,8 @@ func (a *agent) send() error {
 	if err := a.sendTurn(c, a.turnInputs); err != nil {
 		return err
 	}
-	c.draft = ""
-	c.dirty = true
-	delete(a.attachments, a.attachmentScope())
-	delete(a.images, a.attachmentScope())
-	if fresh {
-		delete(a.drafts, a.context.ProjectPath)
-	}
 	if c.Name == "" && c.titleJob == nil {
-		a.generateTitle(c, attachmentPrompt(prompt, files))
+		a.generateTitle(c, text)
 	}
 	return nil
 }
@@ -802,14 +851,17 @@ func (a *agent) sendTurn(c *conversation, inputs []input) error {
 		p = c.progress
 	}
 	previous := p.followupFrom
+	message := a.sending
+	clientID := a.appendSending(c)
 	p.followupFrom = p.liveItems + 1
 	c.dirty = true
 	a.flush()
 	_, err := call[json.RawMessage](a.client, "turn/steer", struct {
 		ThreadID       string  `json:"threadId"`
 		ExpectedTurnID string  `json:"expectedTurnId"`
+		ClientID       string  `json:"clientUserMessageId,omitempty"`
 		Input          []input `json:"input"`
-	}{c.ID, c.turnID, inputs})
+	}{c.ID, c.turnID, clientID, inputs})
 	if err != nil {
 		p.followupFrom = previous
 		c.dirty = true
@@ -818,6 +870,13 @@ func (a *agent) sendTurn(c *conversation, inputs []input) error {
 	// failures leave acceptance unknown and must preserve the input for the user.
 	var rejected *rpcError
 	if err != nil && !c.busy && errors.As(err, &rejected) {
+		if message != nil {
+			if !message.pending {
+				return nil
+			}
+			c.removePendingMessage(message)
+			a.sending = message
+		}
 		return a.startTurn(c, inputs)
 	}
 	return err
@@ -826,24 +885,32 @@ func (a *agent) sendTurn(c *conversation, inputs []input) error {
 func (a *agent) startTurn(c *conversation, inputs []input) error {
 	// Show the stop action before waiting for turn/start to acknowledge the task.
 	a.setBusy(c, true)
-	c.progress = &turnProgress{started: time.Now()}
+	previousProgress, previousFiles := c.progress, c.files
+	initialProgress := &turnProgress{started: time.Now()}
+	c.progress = initialProgress
 	c.files = newTurnFiles("", c.context.ProjectPath)
+	clientID := a.appendSending(c)
 	c.status = ""
 	a.flush()
 	p := a.permission()
 	params := struct {
 		approvalSettings
 		ThreadID      string        `json:"threadId"`
+		ClientID      string        `json:"clientUserMessageId,omitempty"`
 		Model         string        `json:"model,omitempty"`
 		Effort        string        `json:"effort,omitempty"`
 		Input         []input       `json:"input"`
 		SandboxPolicy sandboxPolicy `json:"sandboxPolicy"`
-	}{ThreadID: c.ID, Input: inputs, Model: a.model, Effort: a.turnEffort(), SandboxPolicy: p.policy, approvalSettings: p.approvalSettings}
+	}{ThreadID: c.ID, ClientID: clientID, Input: inputs, Model: a.model, Effort: a.turnEffort(), SandboxPolicy: p.policy, approvalSettings: p.approvalSettings}
 	result, err := call[struct {
 		Turn turn `json:"turn"`
 	}](a.client, "turn/start", params)
 	if err != nil {
-		c.finishProgress(turn{}, time.Now())
+		if c.progress == initialProgress && initialProgress.id == "" {
+			c.progress, c.files = previousProgress, previousFiles
+		} else {
+			c.finishProgress(turn{}, time.Now())
+		}
 		a.setBusy(c, false)
 		if c.interrupted {
 			c.status = "任务已停止"
@@ -939,7 +1006,8 @@ func (a *agent) resume(id string) error {
 			c = &conversation{thread: thread{ID: id}, context: a.context}
 			a.conversations[id] = c
 		}
-		c.items, c.itemsByID, c.progress, c.files, c.cursor = nil, nil, nil, nil, ""
+		c.clearServerHistory()
+		c.progress, c.files, c.cursor = nil, nil, ""
 		resumed := false
 		defer func() {
 			if fresh && !resumed {
@@ -1070,6 +1138,9 @@ func (a *agent) readHistory(c *conversation) error {
 		}
 		for _, item := range t.Items {
 			if byID[item.ID] == nil {
+				if local := byID[item.ClientID]; local != nil && local.pending {
+					c.removePendingMessage(local)
+				}
 				if !files.complete {
 					files.add(item)
 				}
@@ -1110,7 +1181,8 @@ func newChatItem(item threadItem, complete bool) *chatItem {
 
 func (i *chatItem) replace(item threadItem, complete bool) {
 	sameImage := item.Type == "imageView" && i.data.Type == "imageView" && item.Path == i.data.Path
-	i.data, i.complete = item, complete
+	i.data, i.complete, i.pending = item, complete, false
+	i.sendError = ""
 	if i.questions == nil && item.Type == "agentMessage" && len(item.Questions) > 0 {
 		i.questions = newAsyncQuestions(item.ID, item.Questions)
 	}
@@ -1120,8 +1192,8 @@ func (i *chatItem) replace(item threadItem, complete bool) {
 	}
 	i.text.Reset()
 	i.output.Reset()
+	images := i.images
 	if !sameImage {
-		clear(i.images)
 		i.images = i.images[:0]
 	}
 	appendText(&i.text, item.Text)
@@ -1130,11 +1202,16 @@ func (i *chatItem) replace(item threadItem, complete bool) {
 			appendText(&i.text, part.Text)
 		} else if part.Type == "image" || part.Type == "localImage" {
 			attachment := imageAttachment{}
-			if preview, err := imagePreview(part.URL, 160); err == nil {
+			if index := len(i.images); index < len(images) && images[index].url == part.URL {
+				attachment = images[index]
+			} else if preview, err := imagePreview(part.URL, 160); err == nil {
 				attachment.url, attachment.preview = part.URL, preview
 			}
 			i.images = append(i.images, attachment)
 		}
+	}
+	if len(i.images) < len(images) {
+		clear(images[len(i.images):])
 	}
 	if item.Type == "reasoning" {
 		for _, s := range item.Summary {
@@ -1184,6 +1261,12 @@ func (c *conversation) item(id, kind string) *chatItem {
 		return item
 	}
 	i := newChatItem(threadItem{ID: id, Type: kind}, false)
+	c.appendItem(i)
+	return i
+}
+
+func (c *conversation) appendItem(i *chatItem) {
+	byID := c.itemIndex()
 	i.progress = c.progress
 	if i.progress != nil {
 		i.progress.liveItems++
@@ -1191,8 +1274,17 @@ func (c *conversation) item(id, kind string) *chatItem {
 	}
 	i.files = c.files
 	c.items = append(c.items, i)
-	byID[id] = i
-	return i
+	byID[i.data.ID] = i
+}
+
+func (a *agent) appendSending(c *conversation) string {
+	if a.sending == nil {
+		return ""
+	}
+	i := a.sending
+	a.sending = nil
+	c.appendItem(i)
+	return i.data.ID
 }
 
 func (a *agent) onMessage(message envelope) {
@@ -1219,8 +1311,34 @@ func (a *agent) onMessage(message envelope) {
 		}
 		return
 	}
+	if message.Method == "error" && len(message.ID) == 0 {
+		var event struct {
+			Error     *turnError `json:"error"`
+			ThreadID  string     `json:"threadId"`
+			TurnID    string     `json:"turnId"`
+			WillRetry bool       `json:"willRetry"`
+		}
+		if err := json.Unmarshal(message.Params, &event); err != nil {
+			fmt.Fprintln(stderrWriter, err)
+			return
+		}
+		c := a.conversations[event.ThreadID]
+		if c == nil || event.Error == nil {
+			return
+		}
+		detail := event.Error.description()
+		codexLog.Printf("thread=%s turn=%s willRetry=%t %s", event.ThreadID, event.TurnID, event.WillRetry, detail)
+		if event.WillRetry {
+			if p := c.progress; p != nil && !p.complete && p.id == event.TurnID {
+				p.retryStatus = detail
+			}
+		} else {
+			c.status = detail
+		}
+		c.dirty = true
+		return
+	}
 	var event struct {
-		Error       *rpcError       `json:"error"`
 		ThreadID    string          `json:"threadId"`
 		ItemID      string          `json:"itemId"`
 		Delta       string          `json:"delta"`
@@ -1271,6 +1389,9 @@ func (a *agent) onMessage(message envelope) {
 	}
 	switch message.Method {
 	case "item/started", "item/completed":
+		if event.Item.Type == "userMessage" && event.Item.ClientID != "" {
+			c.confirmMessage(event.Item)
+		}
 		i := c.item(event.Item.ID, event.Item.Type)
 		if message.Method == "item/completed" && !(i.complete && i.data.Type == "fileChange" && i.data.Status == "completed") && i.files != nil && !i.files.complete {
 			i.files.add(event.Item)
@@ -1331,7 +1452,7 @@ func (a *agent) onMessage(message envelope) {
 		c.turnID = ""
 		c.requests = nil
 		if event.Turn.Error != nil {
-			c.status = event.Turn.Error.Message
+			c.status = event.Turn.Error.description()
 		}
 		c.interrupted = event.Turn.Status == "interrupted"
 		if c.interrupted {
@@ -1339,10 +1460,6 @@ func (a *agent) onMessage(message envelope) {
 		}
 	case "serverRequest/resolved":
 		c.requests = slices.DeleteFunc(c.requests, func(r *approval) bool { return string(r.id) == string(event.RequestID) })
-	case "error":
-		if event.Error != nil {
-			c.status = event.Error.Message
-		}
 	default:
 		return
 	}

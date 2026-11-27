@@ -26,6 +26,9 @@ func (a *agent) setBusy(c *conversation, busy bool) {
 
 func (a *agent) handleLifecycle(event peb.LifecycleEvent) peb.LifecycleReply {
 	if event.Kind == peb.ProjectClosed {
+		if a.selected != nil && a.selected.ID == "" && a.selected.context.ProjectPath == event.ProjectPath {
+			a.selectConversation(nil)
+		}
 		for id, c := range a.conversations {
 			if c.context.ProjectPath != event.ProjectPath {
 				continue

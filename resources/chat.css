@@ -148,6 +148,7 @@
 .codex-message-actions { position: absolute; bottom: 0; right: 0; display: flex; align-items: center; gap: 6px; height: 28px; color: var(--vscode-descriptionForeground); opacity: 0; pointer-events: none; }
 .codex-user:hover .codex-message-actions, .codex-user:focus-within .codex-message-actions { opacity: 1; pointer-events: auto; }
 .codex-message-time { margin-right: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.codex-send-error { margin: 4px 0 0; font-size: 12px; text-align: right; }
 .codex-chat-running .codex-message-edit { display: none; }
 .codex-user-editing { width: 100%; max-width: 100%; }
 .codex-message-editor { display: block; box-sizing: border-box; width: 100%; min-height: 48px; max-height: 280px; margin: 0; padding: 0; resize: none; overflow-y: auto; border: 0; outline: none; color: var(--vscode-input-foreground); background: transparent; font-family: ui; font-size: 14px; line-height: 1.7; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }

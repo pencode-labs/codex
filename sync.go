@@ -200,7 +200,7 @@ func (a *agent) reconcileObserved(c *conversation, turns []turn) {
 		c.turnID = latest.ID
 	}
 	if latest.Error != nil {
-		c.status = latest.Error.Message
+		c.status = latest.Error.description()
 	}
 	if latest.Status == "interrupted" {
 		c.status = "任务已在原客户端停止。"

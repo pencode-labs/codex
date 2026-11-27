@@ -143,8 +143,14 @@ func TestSendImagesWithTextAndRetry(t *testing.T) {
 			if err := a.pasteImage(peb.EditorEvent{InputType: "image/png", Data: source, Value: prompt}); err != nil {
 				t.Fatal(err)
 			}
-			if err := a.send(); err == nil || c.draft != prompt || len(a.images[a.attachmentScope()]) != 1 || c.busy {
-				t.Fatal("failed send must preserve the draft and images", err)
+			if err := a.send(); err != nil || c.draft != "" || len(a.images) != 0 || c.busy {
+				t.Fatal("failed send left input in the composer", err)
+			}
+			if len(c.items) != 1 || len(c.items[0].images) != 1 || c.items[0].images[0].url != source || c.items[0].sendError == "" {
+				t.Fatal("failed send did not keep the image in the transcript")
+			}
+			if err := a.pasteImage(peb.EditorEvent{InputType: "image/png", Data: source, Value: prompt}); err != nil {
+				t.Fatal(err)
 			}
 			if err := a.send(); err != nil || c.draft != "" || len(a.images) != 0 {
 				t.Fatal("successful retry must clear the draft and images", err)
@@ -166,23 +172,27 @@ func TestSendImagesWithTextAndRetry(t *testing.T) {
 	}
 }
 
-func TestImageDraftMigratesToNewThreadOnFailedSend(t *testing.T) {
+func TestFailedImageSendStaysInNewChat(t *testing.T) {
 	var output bytes.Buffer
-	client := &rpcClient{ctx: t.Context(), writer: json.NewEncoder(&output), messages: make(chan envelope, 2)}
-	client.messages <- envelope{ID: json.RawMessage(`1`), Result: json.RawMessage(`{"thread":{"id":"new","name":"task"}}`)}
-	client.messages <- envelope{ID: json.RawMessage(`2`), Error: &rpcError{Code: -32000, Message: "retry"}}
+	client := &rpcClient{ctx: t.Context(), writer: json.NewEncoder(&output), messages: make(chan envelope, 3)}
+	client.messages <- envelope{ID: json.RawMessage(`1`), Error: &rpcError{Code: -32000, Message: "thread unavailable"}}
+	client.messages <- envelope{ID: json.RawMessage(`2`), Result: json.RawMessage(`{"thread":{"id":"new","name":"task"}}`)}
+	client.messages <- envelope{ID: json.RawMessage(`3`), Result: json.RawMessage(`{"turn":{"id":"turn","status":"inProgress"}}`)}
 	a := &agent{client: client, conversations: make(map[string]*conversation)}
 	if err := a.pasteImage(peb.EditorEvent{InputType: "image/png", Data: testImageURL(t), Value: "task"}); err != nil {
 		t.Fatal(err)
 	}
-	old := a.attachmentScope()
-	if err := a.send(); err == nil || a.selected == nil || a.selected.ID != "new" || len(a.images[a.attachmentScope()]) != 1 || len(a.images[old]) != 0 {
-		t.Fatal("new thread lost or duplicated the image draft", err)
+	if err := a.send(); err != nil || a.selected == nil || a.selected.ID != "" || len(a.selected.items) != 1 || len(a.images) != 0 {
+		t.Fatal("failed thread creation did not retain the message locally", err)
 	}
-	a.client = nil
-	a.handleLifecycle(peb.LifecycleEvent{Kind: peb.ProjectClosed})
-	if len(a.images) != 0 {
-		t.Fatal("project close retained images")
+	view := a.composerView()
+	if !strings.Contains(view.HTML, "发送失败") || !strings.Contains(view.HTML, "thread unavailable") || !strings.Contains(view.HTML, `alt="已发送图片"`) {
+		t.Fatal("new chat did not show the failed image and reason", view.HTML)
+	}
+	failed := a.selected.items[0]
+	a.setDraft("next")
+	if err := a.send(); err != nil || a.selected.ID != "new" || len(a.selected.items) != 2 || a.selected.items[0] != failed {
+		t.Fatal("thread creation discarded the previous failed message", err)
 	}
 }
 

@@ -8,10 +8,11 @@ import (
 )
 
 type turnProgress struct {
-	started   time.Time
-	id        string
-	toggleRef string
-	elapsed   time.Duration
+	started     time.Time
+	id          string
+	toggleRef   string
+	retryStatus string
+	elapsed     time.Duration
 	// Live item positions stay stable when older history is prepended.
 	liveItems, lastOutput, followupFrom int
 	received, complete                  bool
@@ -41,6 +42,7 @@ func (p *turnProgress) update(t turn, now time.Time) {
 	p.complete = t.Status != "inProgress"
 	p.elapsed = max(0, now.Sub(p.started))
 	if p.complete {
+		p.retryStatus = ""
 		if t.DurationMs != nil {
 			p.elapsed = time.Duration(max(0, *t.DurationMs)) * time.Millisecond
 		} else if t.CompletedAt > 0 && t.StartedAt > 0 {
@@ -69,6 +71,7 @@ func (i *chatItem) modelText() bool {
 func (i *chatItem) receivedModelOutput() {
 	if p := i.progress; p != nil {
 		p.received = true
+		p.retryStatus = ""
 		p.lastOutput = max(p.lastOutput, i.liveOrder)
 	}
 }

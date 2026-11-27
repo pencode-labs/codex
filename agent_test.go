@@ -285,6 +285,7 @@ func fixtureServer() {
 		case "turn/start":
 			var p struct {
 				ThreadID string  `json:"threadId"`
+				ClientID string  `json:"clientUserMessageId"`
 				Model    string  `json:"model"`
 				Effort   string  `json:"effort"`
 				Input    []input `json:"input"`
@@ -352,7 +353,7 @@ func fixtureServer() {
 			}
 			response(map[string]any{"turn": map[string]string{"id": "turn1", "status": "inProgress"}})
 			notify("turn/started", map[string]any{"threadId": active, "turn": map[string]string{"id": "turn1", "status": "inProgress"}})
-			notify("item/completed", map[string]any{"threadId": active, "item": map[string]any{"id": "user", "type": "userMessage", "content": p.Input}})
+			notify("item/completed", map[string]any{"threadId": active, "item": threadItem{ID: "user", ClientID: p.ClientID, Type: "userMessage", Content: p.Input}})
 			if len(p.Input) > 0 && p.Input[0].Text == "wait" {
 				continue
 			}
@@ -642,16 +643,17 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("models", "click", "effort/high", "")
 	waitUI("composer", "Fixture Luna")
 	event("composer", "click", "send", "")
-	// The first paint must show processing before the server acknowledges.
-	firstUpdate := waitUI("composer", "给 Codex 的任务")
+	beforeThread := waitUI("composer", `class="codex-message codex-user"`)
+	if beforeThread.Busy || !strings.Contains(beforeThread.View.HTML, "implement feature") ||
+		strings.Contains(beforeThread.View.HTML, "implement feature</textarea>") {
+		t.Fatal("message did not move into the transcript before thread creation", beforeThread.View.HTML)
+	}
+	firstUpdate := waitUI("composer", "正在思考")
 	if !firstUpdate.Busy {
 		t.Fatal("tab must show processing before turn acknowledgement")
 	}
 	firstPaint := firstUpdate.View
-	checkComposerAction(t, firstPaint, "send")
-	if !strings.Contains(firstPaint.HTML, "正在思考") {
-		t.Fatal("first paint must show thinking before turn acknowledgement", firstPaint.HTML)
-	}
+	checkComposerAction(t, firstPaint, "stop")
 	if !hasElement(firstPaint.HTML, "button", "data-ref", "history/thread1", "aria-current", "true") || !strings.Contains(firstPaint.HTML, ">Codex 新会话</button>") {
 		t.Fatal("new conversation missing from history before turn acknowledgement", firstPaint.HTML)
 	}
@@ -661,6 +663,8 @@ func TestAgentPEBWorkflow(t *testing.T) {
 		t.Fatal("default permissions were not sent", ui.View.HTML)
 	} else if !strings.Contains(ui.View.HTML, "implement feature") || !strings.Contains(ui.View.HTML, html.EscapeString(attachment)) || strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
 		t.Fatal("attachment was not sent or not cleared after success", ui.View.HTML)
+	} else if strings.Count(ui.View.HTML, `class="codex-message codex-user"`) != 1 || !strings.Contains(ui.View.HTML, `data-ref="message/user"`) {
+		t.Fatal("the server confirmation duplicated the local message", ui.View.HTML)
 	}
 	event("composer", "click", "accept/100", "")
 	ui := waitUI("composer", "Final reply")
@@ -792,7 +796,7 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	if ui := waitUI("composer", "draft while history loads"); strings.Contains(ui.View.HTML, `class="codex-history-spinning"`) {
 		t.Fatal("completed refresh retained the loading indicator", ui)
 	}
-	// A failed turn must preserve the user's input instead of silently losing it.
+	// A failed turn keeps the submitted message and its error in the transcript.
 	event("composer", "input", "prompt", "/fixture-r")
 	waitUI("composer", ">fixture-review</span>")
 	event("composer", "click", "completion/0", "")
@@ -802,26 +806,17 @@ func TestAgentPEBWorkflow(t *testing.T) {
 	event("composer", "input", "prompt", failedDraft)
 	addFile(attachment)
 	event("composer", "click", "send", "")
-	if notice := waitUI("error", "fixture failure"); notice.Kind != peb.Notification || notice.Severity != peb.NotificationError || notice.Context.ProjectPath != ctx.ProjectPath {
-		t.Fatal("failed request did not use an IDE notification", notice)
-	}
-	ui = waitUI("composer", `data-ref="send"`)
-	if strings.Contains(ui.View.HTML, "fixture failure") {
-		t.Fatal("failed request leaked into the composer", ui.View.HTML)
+	ui = waitUI("composer", "发送失败")
+	if !strings.Contains(ui.View.HTML, "fixture failure") || !strings.Contains(ui.View.HTML, `class="codex-message codex-user"`) ||
+		strings.Contains(ui.View.HTML, html.EscapeString(failedDraft)+"</textarea>") {
+		t.Fatal("failed request was not retained and marked in the transcript", ui.View.HTML)
 	}
 	checkComposerAction(t, ui.View, "send")
 	if !strings.Contains(ui.View.HTML, "Thread permissions: never/user/danger-full-access; Turn permissions: never/user/dangerFullAccess") {
 		t.Fatal("resumed turn lost full access", ui.View.HTML)
 	}
-	if !strings.Contains(ui.View.HTML, html.EscapeString(failedDraft)+"</textarea>") {
-		t.Fatal("failed request lost the draft")
-	}
-	if !strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
-		t.Fatal("failed request lost the attachment")
-	}
-	event("composer", "click", "remove-file/0", "")
-	if ui := waitUI("composer", html.EscapeString(failedDraft)+"</textarea>"); strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
-		t.Fatal("attachment removal failed", ui.View.HTML)
+	if !strings.Contains(ui.View.HTML, html.EscapeString(attachment)) || strings.Contains(ui.View.HTML, `data-ref="remove-file/0"`) {
+		t.Fatal("the submitted attachment did not stay with the failed message", ui.View.HTML)
 	}
 	// Downgrading a loaded conversation must replace its full-access turn policy.
 	event("composer", "click", "permission-settings", "")

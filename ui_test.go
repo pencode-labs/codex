@@ -26,7 +26,7 @@ func TestChatStatusFollowsCurrentTurnProgress(t *testing.T) {
 				i.progress = progress
 				return i
 			}
-			c := &conversation{progress: current, status: "Reconnecting... 4/5", items: []*chatItem{
+			c := &conversation{progress: current, items: []*chatItem{
 				item("old-user", "userMessage", previous),
 				item("old-reply", "agentMessage", previous),
 			}}
@@ -41,11 +41,12 @@ func TestChatStatusFollowsCurrentTurnProgress(t *testing.T) {
 				c.items = append(c.items, item("current-output", "commandExecution", current))
 				outputRef = `data-ref="activity/current-output/region"`
 			}
-			a := &agent{selected: c}
+			a := &agent{selected: c, conversations: map[string]*conversation{"thread": c}}
+			a.onMessage(envelope{Method: "error", Params: []byte(`{"threadId":"thread","turnId":"current","willRetry":false,"error":{"message":"Model request failed"}}`)})
 			view := a.composerView()
 			progress := strings.Index(view.HTML, `data-ref="progress/current"`)
-			status := strings.Index(view.HTML, c.status)
-			if progress < 0 || status < progress || strings.Count(view.HTML, c.status) != 1 {
+			status := strings.Index(view.HTML, "Model request failed")
+			if progress < 0 || status < progress || strings.Count(view.HTML, "Model request failed") != 1 {
 				t.Fatal("status must appear once below the current turn progress", view.HTML)
 			}
 			if outputRef != "" {

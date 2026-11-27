@@ -153,6 +153,7 @@ func TestEditedMessageRevertsOnceAndRetriesWithOriginalAttachments(t *testing.T)
 		envelope{ID: json.RawMessage(`4`), Result: json.RawMessage(`{"data":[{"id":"prior-turn","status":"completed","items":[{"id":"prior","type":"userMessage","text":"prior prompt"}]}],"nextCursor":"fresh-cursor"}`)},
 		envelope{ID: json.RawMessage(`5`), Error: &rpcError{Code: -32000, Message: "retry"}},
 		envelope{Method: "turn/started", Params: json.RawMessage(`{"threadId":"thread","turn":{"id":"replacement","status":"inProgress"}}`)},
+		envelope{Method: "error", Params: json.RawMessage(`{"threadId":"thread","turnId":"replacement","willRetry":true,"error":{"message":"Reconnecting... 2/5","additionalDetails":"stream closed before response.completed"}}`)},
 		envelope{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread","item":{"id":"new-user","type":"userMessage","content":[{"type":"text","text":"new prompt"}]}}`)},
 		envelope{ID: json.RawMessage(`6`), Result: json.RawMessage(`{"turn":{"id":"replacement","status":"inProgress"}}`)},
 	)
@@ -177,8 +178,16 @@ func TestEditedMessageRevertsOnceAndRetriesWithOriginalAttachments(t *testing.T)
 	if c.editing != nil || len(c.items) != 2 || c.items[1].data.ID != "new-user" || c.draft != "keep composer draft" || !c.busy {
 		t.Fatal("successful retry lost the replacement or composer draft")
 	}
+	const retry = "Reconnecting... 2/5 — stream closed before response.completed"
+	if c.turnID != "replacement" || !strings.Contains(a.composerView().HTML, retry) {
+		t.Fatal("missing retry count or stream failure reason on the replacement turn")
+	}
 	if byID := c.itemIndex(); len(byID) != 2 || byID["new-user"] != c.items[1] || byID["prior"] != c.items[0] {
 		t.Fatal("retry left the item index out of sync")
+	}
+	a.onMessage(envelope{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"thread","turnId":"replacement","itemId":"answer","delta":"recovered"}`)})
+	if !c.busy || strings.Contains(a.composerView().HTML, retry) {
+		t.Fatal("retry status did not clear when the replacement turn resumed streaming")
 	}
 	decoder := json.NewDecoder(output)
 	wantMethods := []string{"thread/items/list", "thread/items/list", "thread/revert", "thread/turns/list", "turn/start", "turn/start"}
