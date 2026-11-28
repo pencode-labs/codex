@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -22,6 +23,8 @@ import (
 
 //go:embed resources/chat.css
 var chatCSS string
+
+const codexPromptID = "pencode-extension-codex-prompt"
 
 // Preview IDs must fit the host's 128-byte action ID alphabet, even when
 // their keys contain paths or escaped thread/turn IDs.
@@ -165,7 +168,7 @@ func (a *agent) composerView() *peb.EditorView {
 		}
 		b.End()
 	}
-	prompt := b.TextElement("textarea", draft, "id", "pencode-extension-codex-prompt", "data-ref", "prompt", "data-pencode-markdown-links", "", "data-pencode-autosize", "", "data-pencode-paste-images", "", "data-pencode-submit-on-enter", "form", "class", "codex-prompt", "aria-label", "给 Codex 的任务", "placeholder", "和 Codex 一起工作，/ 选择技能，@ 引用文件或文件夹", "rows", "3")
+	prompt := b.TextElement("textarea", draft, "id", cmp.Or(a.promptID, codexPromptID), "data-ref", "prompt", "data-pencode-markdown-links", "", "data-pencode-autosize", "", "data-pencode-paste-images", "", "data-pencode-submit-on-enter", "form", "class", "codex-prompt", "aria-label", "给 Codex 的任务", "placeholder", "和 Codex 一起工作，/ 选择技能，@ 引用文件或文件夹", "rows", "3")
 	if a.completion.kind != 0 {
 		prompt.SetAttr("data-pencode-completion", "true")
 		prompt.SetAttr("aria-expanded", "true")

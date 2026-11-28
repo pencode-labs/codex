@@ -192,7 +192,7 @@ type agent struct {
 	model, status                              string
 	executablePath                             string
 	serverURL                                  string
-	chatPaneHTML                               string
+	chatPaneHTML, promptID                     string
 	renameID, renameValue                      string
 	modelError                                 string
 	history                                    threadPage
@@ -762,7 +762,10 @@ func (a *agent) send() (err error) {
 	message := newChatItem(threadItem{ID: clientID, Type: "userMessage", Text: text}, true)
 	message.sentAt, message.images, message.pending = time.Now(), images, true
 	a.sending = message
-	a.setDraft("")
+	// The host restores local edits by control ID. Start the next draft in
+	// a fresh control so a transcript refresh cannot restore the sent text.
+	a.promptID = codexPromptID + "-" + clientID
+	a.replaceDraft("", 0)
 	delete(a.attachments, scope)
 	delete(a.images, scope)
 	defer func() {

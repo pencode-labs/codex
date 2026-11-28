@@ -227,7 +227,7 @@ func (p *composerCompletion) indexFiles(root string) {
 	}
 }
 
-func (a *agent) editCompletion(value string, caret int) {
+func (a *agent) replaceDraft(value string, caret int) {
 	a.setDraft(value)
 	a.completion.caret = caret
 	a.completion.revision++
@@ -245,7 +245,7 @@ func (a *agent) handleCompletion(e peb.EditorEvent) error {
 	if e.Data == "dismiss" {
 		a.dismissCompletion()
 		p.dismissed, p.dismissedCaret = a.draft(), e.Focus
-		a.editCompletion(a.draft(), int(e.Focus))
+		a.replaceDraft(a.draft(), int(e.Focus))
 		return nil
 	}
 	if e.Kind == "completion" {
@@ -285,7 +285,7 @@ func (a *agent) handleCompletion(e peb.EditorEvent) error {
 			reference = item.skill.reference
 		}
 		reference += " "
-		a.editCompletion(before+reference+after, utf8.RuneCountInString(before)+utf8.RuneCountInString(reference))
+		a.replaceDraft(before+reference+after, utf8.RuneCountInString(before)+utf8.RuneCountInString(reference))
 	}
 	return nil
 }
